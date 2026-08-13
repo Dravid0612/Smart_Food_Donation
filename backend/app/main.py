@@ -1,14 +1,21 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import admin, auth, donations
-from app.db.base import Base
+from app.core.config import settings
 from app.db.session import engine
-from app.models import donation, donation_history, ngo, user
+from app.db.base import Base
+import app.models # Ensures all models are registered with Base metadata
 
+# Create database tables automatically
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Smart Food Waste Donation Platform", version="0.1.0")
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,11 +24,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(donations.router)
-app.include_router(admin.router)
+# Import & register routers
+from app.api.routes import auth, donations, ngos, volunteers, notifications, rewards, admin
 
+app.include_router(auth.router, prefix=settings.API_V1_STR)
+app.include_router(donations.router, prefix=settings.API_V1_STR)
+app.include_router(ngos.router, prefix=settings.API_V1_STR)
+app.include_router(volunteers.router, prefix=settings.API_V1_STR)
+app.include_router(notifications.router, prefix=settings.API_V1_STR)
+app.include_router(rewards.router, prefix=settings.API_V1_STR)
+app.include_router(admin.router, prefix=settings.API_V1_STR)
 
-@app.get("/health")
-def health_check() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/")
+def root():
+    return {
+        "message": "Welcome to Smart Food Donation Platform API",
+        "docs": "/docs",
+        "version": "1.0.0"
+    }

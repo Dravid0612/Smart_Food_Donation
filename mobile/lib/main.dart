@@ -1,23 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'app/core/app_state.dart';
-import 'app/core/api_service.dart';
-import 'app/theme/app_theme.dart';
-import 'app/features/auth/splash_page.dart';
+import 'core/theme/app_theme.dart';
+import 'core/routes/app_router.dart';
+import 'providers/auth_provider.dart';
+import 'providers/donation_provider.dart';
+import 'providers/ngo_provider.dart';
+import 'providers/volunteer_provider.dart';
+import 'providers/notification_provider.dart';
+import 'providers/reward_provider.dart';
+import 'providers/admin_provider.dart';
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  final apiService = ApiService();
-  runApp(
-    MultiProvider(
-      providers: [
-        Provider.value(value: apiService),
-        ChangeNotifierProvider(create: (_) => AuthProvider(apiService: apiService)),
-        ChangeNotifierProvider(create: (_) => DonationProvider(apiService: apiService)),
-      ],
-      child: const SmartFoodApp(),
-    ),
-  );
+  runApp(const SmartFoodApp());
 }
 
 class SmartFoodApp extends StatelessWidget {
@@ -25,11 +20,22 @@ class SmartFoodApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Smart Food Donation',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.buildTheme(),
-      home: const SplashPage(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => DonationProvider()),
+        ChangeNotifierProvider(create: (_) => NgoProvider()),
+        ChangeNotifierProvider(create: (_) => VolunteerProvider()),
+        ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => RewardProvider()),
+        ChangeNotifierProvider(create: (_) => AdminProvider()),
+      ],
+      child: MaterialApp.router(
+        title: 'Smart Food Donation',
+        debugShowCheckedModeBanner: false,
+        theme: AppTheme.lightTheme,
+        routerConfig: appRouter,
+      ),
     );
   }
 }
