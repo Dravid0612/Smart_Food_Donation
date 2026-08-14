@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -46,8 +46,7 @@ class UserResponse(BaseModel):
     is_active: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # NGO Schemas
 class NGOCreate(BaseModel):
@@ -84,8 +83,7 @@ class NGOResponse(BaseModel):
     is_verified: bool
     contact_phone: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Food Donation Schemas
 class DonationCreate(BaseModel):
@@ -123,8 +121,7 @@ class DonationHistoryResponse(BaseModel):
     remarks: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DonationResponse(BaseModel):
     id: int
@@ -147,8 +144,7 @@ class DonationResponse(BaseModel):
     updated_at: datetime
     urgency_level: Optional[str] = "Fresh" # Fresh, Use Soon, Urgent, Expired
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DonationDetailResponse(DonationResponse):
     donor_name: Optional[str] = None
@@ -169,8 +165,7 @@ class VolunteerAssignmentResponse(BaseModel):
     delivered_at: Optional[datetime] = None
     status: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Notification Schemas
 class NotificationResponse(BaseModel):
@@ -183,8 +178,7 @@ class NotificationResponse(BaseModel):
     is_read: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # Reward Schemas
 class RewardResponse(BaseModel):
@@ -195,8 +189,8 @@ class RewardResponse(BaseModel):
     next_level_points: int = 100
     points_to_next_level: int = 100
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
+
 
 # Smart Recommendations
 class NGORecommendationResponse(BaseModel):

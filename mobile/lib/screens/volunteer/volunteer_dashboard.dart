@@ -2,13 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/auth_provider.dart';
-import '../../providers/donation_provider.dart';
+import '../../providers/volunteer_task_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../widgets/custom_card.dart';
 import '../../widgets/status_chip.dart';
 import '../../widgets/urgency_chip.dart';
 import '../../widgets/loading_indicator.dart';
 import '../../widgets/empty_state.dart';
+
+enum VolunteerAvailability { available, busy, offline }
 
 class VolunteerDashboardScreen extends StatefulWidget {
   const VolunteerDashboardScreen({super.key});
@@ -18,37 +20,49 @@ class VolunteerDashboardScreen extends StatefulWidget {
 }
 
 class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
-  bool _isAvailable = true;
+  VolunteerAvailability _availability = VolunteerAvailability.available;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _loadVolunteerData();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
   }
 
-  Future<void> _loadVolunteerData() async {
-    final donationProv = Provider.of<DonationProvider>(context, listen: false);
+  Future<void> _loadData() async {
+    final taskProv = Provider.of<VolunteerTaskProvider>(context, listen: false);
     final notifProv = Provider.of<NotificationProvider>(context, listen: false);
+    await Future.wait([taskProv.fetchMyTasks(), notifProv.fetchNotifications()]);
+  }
 
-    await Future.wait([
-      donationProv.fetchDonations(),
-      notifProv.fetchNotifications(),
-    ]);
+  Color get _availabilityColor {
+    switch (_availability) {
+      case VolunteerAvailability.available: return const Color(0xFF10B981);
+      case VolunteerAvailability.busy: return const Color(0xFFF59E0B);
+      case VolunteerAvailability.offline: return const Color(0xFF64748B);
+    }
+  }
+
+  String get _availabilityLabel {
+    switch (_availability) {
+      case VolunteerAvailability.available: return '🟢  Available for Pickups';
+      case VolunteerAvailability.busy: return '🟠  Busy';
+      case VolunteerAvailability.offline: return '⚫  Offline';
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
-    final donationProv = Provider.of<DonationProvider>(context);
+    final taskProv = Provider.of<VolunteerTaskProvider>(context);
     final notifProv = Provider.of<NotificationProvider>(context);
-
     final user = auth.currentUser;
-    final allDonations = donationProv.donations;
 
-    final activeAssignments = allDonations.where((d) => ['accepted', 'volunteer_assigned', 'collected'].contains(d.status)).toList();
-    final completedDeliveries = allDonations.where((d) => d.status == 'completed' || d.status == 'delivered').toList();
+    final activeTasks = taskProv.assignedTasks
+        .where((d) => ['volunteer_assigned', 'collected'].contains(d.status))
+        .toList();
+    final completedTasks = taskProv.assignedTasks
+        .where((d) => ['delivered', 'completed'].contains(d.status))
+        .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -56,232 +70,196 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(user?.name ?? 'Volunteer', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            const Text('Volunteer Logistics Portal', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+            const Text('Volunteer Portal', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
           ],
         ),
         actions: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              IconButton(
-                icon: const Icon(Icons.notifications_outlined),
-                onPressed: () => context.push('/notifications'),
-              ),
-              if (notifProv.unreadCount > 0)
-                Positioned(
-                  right: 8,
-                  top: 8,
-                  child: Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
-                    child: Text('${notifProv.unreadCount}', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                  ),
+          Stack(alignment: Alignment.center, children: [
+            IconButton(
+              icon: const Icon(Icons.notifications_outlined),
+              onPressed: () => context.push('/notifications'),
+            ),
+            if (notifProv.unreadCount > 0)
+              Positioned(
+                right: 8, top: 8,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+                  child: Text('${notifProv.unreadCount}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                 ),
-            ],
-          ),
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
-            onPressed: () => context.push('/profile'),
-          ),
+              ),
+          ]),
+          IconButton(icon: const Icon(Icons.account_circle_outlined), onPressed: () => context.push('/profile')),
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: _loadVolunteerData,
+        onRefresh: _loadData,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Availability Toggle Card
+              // ── 3-State Availability Selector ────────────────────────────
               CustomCard(
                 padding: const EdgeInsets.all(16),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
                         CircleAvatar(
-                          backgroundColor: _isAvailable ? const Color(0xFFD1FAE5) : Colors.grey.shade200,
-                          child: Icon(
-                            _isAvailable ? Icons.directions_bike : Icons.directions_bike_outlined,
-                            color: _isAvailable ? const Color(0xFF10B981) : Colors.grey,
-                          ),
+                          backgroundColor: _availabilityColor.withOpacity(0.15),
+                          child: Icon(Icons.directions_bike, color: _availabilityColor),
                         ),
-                        const SizedBox(width: 14),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              _isAvailable ? 'Status: Available for Pickups' : 'Status: Offline',
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                            ),
-                            Text(
-                              _isAvailable ? 'Ready to receive route dispatches' : 'Turn on to accept food pickups',
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-                            ),
-                          ],
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('Availability', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+                              Text(_availabilityLabel, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                            ],
+                          ),
                         ),
                       ],
                     ),
-                    Switch(
-                      value: _isAvailable,
-                      activeColor: const Color(0xFF10B981),
-                      onChanged: (val) => setState(() => _isAvailable = val),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: VolunteerAvailability.values.map((status) {
+                        final labels = {
+                          VolunteerAvailability.available: '🟢 Available',
+                          VolunteerAvailability.busy: '🟠 Busy',
+                          VolunteerAvailability.offline: '⚫ Offline',
+                        };
+                        final isSelected = _availability == status;
+                        return Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 3),
+                            child: ChoiceChip(
+                              label: Text(labels[status]!, style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
+                              selected: isSelected,
+                              onSelected: (_) {
+                                setState(() => _availability = status);
+                                Provider.of<VolunteerTaskProvider>(context, listen: false)
+                                    .setAvailability(status == VolunteerAvailability.available);
+                              },
+                            ),
+                          ),
+                        );
+                      }).toList(),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
 
-              // Metrics Row
+              // ── Metrics Row ──────────────────────────────────────────────
               Row(
                 children: [
-                  Expanded(
-                    child: _buildMetricTile("Today's Pickups", '${activeAssignments.length}', Icons.local_shipping, Colors.blue),
-                  ),
+                  Expanded(child: _metricTile('Active Tasks', '${activeTasks.length}', Icons.local_shipping, Colors.blue)),
                   const SizedBox(width: 12),
-                  Expanded(
-                    child: _buildMetricTile('Completed Deliveries', '${completedDeliveries.length}', Icons.task_alt, const Color(0xFF10B981)),
-                  ),
+                  Expanded(child: _metricTile('Completed', '${completedTasks.length}', Icons.task_alt, const Color(0xFF10B981))),
+                  const SizedBox(width: 12),
+                  Expanded(child: _metricTile('Meals Moved', '${taskProv.totalMealsTransported}', Icons.restaurant, Colors.purple)),
                 ],
+              ),
+              const SizedBox(height: 20),
+
+              // ── Impact Link ──────────────────────────────────────────────
+              GestureDetector(
+                onTap: () => context.push('/volunteer/impact'),
+                child: Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [Color(0xFF047857), Color(0xFF10B981)]),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.emoji_events, color: Colors.amber),
+                      SizedBox(width: 10),
+                      Expanded(child: Text('View My Impact & Badges →', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+                      Icon(Icons.chevron_right, color: Colors.white70),
+                    ],
+                  ),
+                ),
               ),
               const SizedBox(height: 24),
 
-              // Section Header
-              const Text('Assigned Pickups & Deliveries', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+              // ── Active Tasks ─────────────────────────────────────────────
+              const Text('My Active Pickups', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const SizedBox(height: 12),
 
-              if (donationProv.isLoading)
-                const LoadingIndicatorWidget(message: 'Syncing volunteer dispatch tasks...')
-              else if (activeAssignments.isEmpty)
+              if (taskProv.isLoading)
+                const LoadingIndicatorWidget(message: 'Syncing your tasks...')
+              else if (activeTasks.isEmpty)
                 EmptyStateWidget(
                   icon: Icons.directions_bike_outlined,
-                  title: 'No Pending Pickups',
-                  message: 'You have no assigned food pickups right now.',
+                  title: _availability == VolunteerAvailability.offline
+                      ? 'You\'re Offline'
+                      : 'No Active Pickups',
+                  message: _availability == VolunteerAvailability.offline
+                      ? 'Switch to Available to receive pickup requests.'
+                      : 'No assigned food pickups right now. Stay ready!',
                 )
               else
                 ListView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
-                  itemCount: activeAssignments.length,
-                  itemBuilder: (context, index) {
-                    final item = activeAssignments[index];
+                  itemCount: activeTasks.length,
+                  itemBuilder: (ctx, i) {
+                    final item = activeTasks[i];
                     return CustomCard(
+                      onTap: () => context.push('/volunteer/task/${item.id}'),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
                               ClipRRect(
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(10),
                                 child: Image.network(
                                   item.imageUrl ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400',
-                                  width: 70,
-                                  height: 70,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Container(width: 70, height: 70, color: Colors.grey.shade200, child: const Icon(Icons.fastfood)),
+                                  width: 60, height: 60, fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => Container(
+                                    width: 60, height: 60, color: Colors.grey.shade200,
+                                    child: const Icon(Icons.fastfood),
+                                  ),
                                 ),
                               ),
-                              const SizedBox(width: 14),
+                              const SizedBox(width: 12),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            item.foodName,
-                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                                            overflow: TextOverflow.ellipsis,
-                                          ),
-                                        ),
-                                        UrgencyChip(urgency: item.urgencyLevel),
-                                      ],
-                                    ),
+                                    Text(item.foodName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15), overflow: TextOverflow.ellipsis),
+                                    Text('${item.quantity.toInt()} ${item.quantityUnit} • ${item.foodCategory}',
+                                        style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
                                     const SizedBox(height: 4),
-                                    Text(
-                                      '${item.quantity.toInt()} ${item.quantityUnit} • ${item.foodCategory}',
-                                      style: const TextStyle(fontSize: 13, color: Color(0xFF64748B)),
-                                    ),
+                                    Row(children: [StatusChip(status: item.status), const SizedBox(width: 8), UrgencyChip(urgency: item.urgencyLevel)]),
                                   ],
                                 ),
                               ),
+                              const Icon(Icons.chevron_right, color: Colors.grey),
                             ],
                           ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 10),
                           const Divider(),
-
-                          // Route details: Pickup & Destination
                           Row(
                             children: [
-                              const Icon(Icons.store, size: 16, color: Colors.blue),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  'Pickup: ${item.pickupAddress}',
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
+                              const Icon(Icons.store, size: 14, color: Colors.blue),
+                              const SizedBox(width: 4),
+                              Expanded(child: Text('Pickup: ${item.pickupAddress}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)),
                             ],
                           ),
-                          const SizedBox(height: 4),
+                          const SizedBox(height: 3),
                           Row(
                             children: [
-                              const Icon(Icons.location_on, size: 16, color: Color(0xFF10B981)),
-                              const SizedBox(width: 6),
-                              Expanded(
-                                child: Text(
-                                  'Destination: ${item.ngoName ?? "Assigned NGO"}',
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 16),
-
-                          // Action Buttons
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              StatusChip(status: item.status),
-                              Row(
-                                children: [
-                                  if (item.status == 'accepted' || item.status == 'volunteer_assigned')
-                                    ElevatedButton.icon(
-                                      onPressed: () async {
-                                        final prov = Provider.of<DonationProvider>(context, listen: false);
-                                        final ok = await prov.collectDonation(item.id);
-                                        if (ok && context.mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('Marked as Food Collected! En route to NGO.'), backgroundColor: Colors.amber),
-                                          );
-                                        }
-                                      },
-                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade700),
-                                      icon: const Icon(Icons.shopping_bag_outlined),
-                                      label: const Text('Mark Collected'),
-                                    )
-                                  else if (item.status == 'collected')
-                                    ElevatedButton.icon(
-                                      onPressed: () async {
-                                        final prov = Provider.of<DonationProvider>(context, listen: false);
-                                        final ok = await prov.deliverDonation(item.id);
-                                        if (ok && context.mounted) {
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('Marked as Delivered! +10 Points awarded to Donor.'), backgroundColor: Color(0xFF10B981)),
-                                          );
-                                        }
-                                      },
-                                      icon: const Icon(Icons.task_alt),
-                                      label: const Text('Mark Delivered'),
-                                    ),
-                                ],
-                              ),
+                              const Icon(Icons.location_on, size: 14, color: Color(0xFF10B981)),
+                              const SizedBox(width: 4),
+                              Expanded(child: Text('NGO: ${item.ngoName ?? "Assigned NGO"}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)),
                             ],
                           ),
                         ],
@@ -296,17 +274,16 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
     );
   }
 
-  Widget _buildMetricTile(String label, String value, IconData icon, Color color) {
+  Widget _metricTile(String label, String value, IconData icon, Color color) {
     return CustomCard(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 24),
-          const SizedBox(height: 8),
-          Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 6),
+          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
         ],
       ),
     );

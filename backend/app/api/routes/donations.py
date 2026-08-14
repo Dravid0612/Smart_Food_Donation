@@ -8,11 +8,15 @@ from app.models.models import (
 )
 from app.schemas.schemas import (
     DonationCreate, DonationUpdate, DonationResponse, DonationDetailResponse,
-    NGORecommendationResponse, VolunteerRecommendationResponse
+    DonationHistoryResponse, NGORecommendationResponse, VolunteerRecommendationResponse
 )
+
 from app.core.dependencies import get_current_user, require_role
 from app.services.urgency_service import calculate_urgency
-from app.services.recommendation_service import recommend_ngos, recommend_volunteers
+from app.services.recommendation_service import (
+    recommend_ngos, recommend_volunteers, global_batch_match_ngos, optimize_volunteer_routes
+)
+
 from app.services.reward_service import add_reward_points
 from app.services.notification_service import create_notification
 
@@ -294,3 +298,36 @@ def get_volunteer_recommendations(donation_id: int, db: Session = Depends(get_db
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found.")
     return recommend_volunteers(db, donation)
+
+@router.get("/batch-match/run")
+def run_batch_matching(db: Session = Depends(get_db), current_user: User = Depends(require_role(["admin", "ngo"]))):
+    """Executes Hungarian Bipartite Algorithm to globally match all pending donations with optimal available NGOs."""
+    return global_batch_match_ngos(db)
+
+@router.get("/batched-routes/optimize")
+def get_optimized_routes(db: Session = Depends(get_db), current_user: User = Depends(require_role(["volunteer", "admin"]))):
+    """Executes VRPTW spatial clustering algorithm to optimize multi-stop pickup routes for volunteers."""
+    return optimize_volunteer_routes(db)
+
+@router.get("/{donation_id}/carbon-impact")
+def get_carbon_impact(donation_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Calculates environmental carbon CO2 and water footprint metrics for a food donation."""
+    donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).first()
+    if not donation:
+        raise HTTPException(status_code=404, detail="Donation not found.")
+
+    qty_kg = donation.quantity if donation.quantity_unit == "Kg" else donation.quantity * 0.4
+    co2_saved_kg = round(qty_kg * 2.5, 2) # ~2.5 kg CO2 per kg food rescued
+    water_saved_liters = round(qty_kg * 1000.0, 1) # ~1000L water saved per kg food
+
+    return {
+        "donation_id": donation.id,
+        "food_name": donation.food_name,
+        "quantity": donation.quantity,
+        "unit": donation.quantity_unit,
+        "co2_saved_kg": co2_saved_kg,
+        "water_saved_liters": water_saved_liters,
+        "trees_equivalent": round(co2_saved_kg / 20.0, 2), # 1 tree absorbs ~20kg CO2/year
+        "status": donation.status
+    }
+

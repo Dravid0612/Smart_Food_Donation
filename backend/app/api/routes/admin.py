@@ -83,3 +83,41 @@ def get_all_admin_ngos(
     current_user: User = Depends(require_role(["admin"]))
 ):
     return db.query(NGO).all()
+
+@router.get("/waste-heatmap")
+def get_waste_heatmap(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["admin"]))
+):
+    """Returns spatial cluster density data for surplus food heatmap visualization."""
+    donations = db.query(FoodDonation).all()
+    grid_map = {}
+
+    for d in donations:
+        if d.latitude and d.longitude:
+            # Round coordinates to ~1km grid cells (2 decimal places)
+            lat_grid = round(d.latitude, 2)
+            lon_grid = round(d.longitude, 2)
+            key = f"{lat_grid},{lon_grid}"
+
+            if key not in grid_map:
+                grid_map[key] = {
+                    "latitude": lat_grid,
+                    "longitude": lon_grid,
+                    "total_donations": 0,
+                    "total_meals": 0.0,
+                    "active_urgent_count": 0
+                }
+
+            grid_map[key]["total_donations"] += 1
+            grid_map[key]["total_meals"] += float(d.quantity)
+            if calculate_urgency(d.preparation_time, d.expiry_time) == "Urgent":
+                grid_map[key]["active_urgent_count"] += 1
+
+    heatmap_points = list(grid_map.values())
+    return {
+        "clusters": heatmap_points,
+        "total_clusters": len(heatmap_points),
+        "total_impacted_meals": sum(p["total_meals"] for p in heatmap_points)
+    }
+

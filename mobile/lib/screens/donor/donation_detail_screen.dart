@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,8 @@ import '../../widgets/urgency_chip.dart';
 import '../../widgets/custom_card.dart';
 import '../../widgets/map_widget.dart';
 import '../../widgets/loading_indicator.dart';
+import '../../widgets/otp_display_widget.dart';
+import '../../widgets/step_progress_widget.dart';
 
 class DonationDetailScreen extends StatefulWidget {
   final int donationId;
@@ -17,12 +20,83 @@ class DonationDetailScreen extends StatefulWidget {
 }
 
 class _DonationDetailScreenState extends State<DonationDetailScreen> {
+  // Generate a consistent OTP per donation ID (demo only)
+  late final String _pickupOtp;
+
   @override
   void initState() {
     super.initState();
+    // Deterministic OTP based on donation ID for demo consistency
+    final rng = Random(widget.donationId * 7919);
+    _pickupOtp = (1000 + rng.nextInt(8999)).toString();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<DonationProvider>(context, listen: false).fetchDonationDetail(widget.donationId);
+      Provider.of<DonationProvider>(context, listen: false)
+          .fetchDonationDetail(widget.donationId);
     });
+  }
+
+  List<StepItem> _buildTimeline(String status, String? ngoName, String? volunteerName) {
+    final s = status.toLowerCase();
+
+    StepState _state(List<String> passedStatuses) {
+      if (passedStatuses.contains(s)) return StepState.completed;
+      // Check if it's the current active step
+      final allStatuses = [
+        'pending', 'matching', 'accepted', 'volunteer_assigned',
+        'picked_up', 'collected', 'delivered', 'completed'
+      ];
+      final currentIndex = allStatuses.indexOf(s);
+      final stepIndex = allStatuses.indexWhere((st) => passedStatuses.contains(st));
+      if (stepIndex >= 0 && stepIndex == currentIndex + 1) return StepState.active;
+      return StepState.pending;
+    }
+
+    return [
+      StepItem(
+        title: 'Donation Created',
+        subtitle: 'Posted to community network',
+        state: StepState.completed,
+      ),
+      StepItem(
+        title: 'NGO Matching',
+        subtitle: 'Searching for nearby NGOs by distance & capacity',
+        state: _state(['accepted', 'volunteer_assigned', 'picked_up', 'collected', 'delivered', 'completed']),
+      ),
+      StepItem(
+        title: 'NGO Accepted',
+        subtitle: ngoName != null ? 'Accepted by $ngoName' : 'Waiting for NGO acceptance',
+        state: _state(['volunteer_assigned', 'picked_up', 'collected', 'delivered', 'completed']),
+      ),
+      StepItem(
+        title: 'Volunteer Assigned',
+        subtitle: volunteerName != null ? 'Assigned to $volunteerName' : 'Pending assignment',
+        state: _state(['picked_up', 'collected', 'delivered', 'completed']),
+      ),
+      StepItem(
+        title: 'Pickup Started',
+        subtitle: 'Volunteer en route to pickup location',
+        state: _state(['collected', 'delivered', 'completed']),
+      ),
+      StepItem(
+        title: 'Food Picked Up',
+        subtitle: 'Collected from donor location',
+        state: _state(['delivered', 'completed']),
+      ),
+      StepItem(
+        title: 'Delivered to NGO',
+        subtitle: 'Food handed over to NGO',
+        state: _state(['completed']),
+      ),
+      StepItem(
+        title: 'Completed',
+        subtitle: 'Donation successfully completed 🎉',
+        state: s == 'completed' ? StepState.completed : StepState.pending,
+      ),
+    ];
+  }
+
+  bool _shouldShowOtp(String status) {
+    return ['volunteer_assigned', 'picked_up'].contains(status.toLowerCase());
   }
 
   @override
@@ -45,7 +119,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Image Banner
+                  // ── Image Banner ──────────────────────────────────────
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: Image.network(
@@ -62,7 +136,7 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Title & Urgency
+                  // ── Title & Chips ─────────────────────────────────────
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
@@ -76,7 +150,6 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                     ],
                   ),
                   const SizedBox(height: 8),
-
                   Row(
                     children: [
                       StatusChip(status: item.status),
@@ -89,43 +162,43 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // Description
+                  // ── Description ───────────────────────────────────────
                   if (item.description != null && item.description!.isNotEmpty) ...[
                     CustomCard(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Description', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                          const SizedBox(height: 4),
-                          Text(item.description!, style: const TextStyle(color: Color(0xFF475569))),
+                          const Text('Details', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                          const SizedBox(height: 6),
+                          Text(item.description!, style: const TextStyle(color: Color(0xFF475569), fontSize: 13)),
                         ],
                       ),
                     ),
                     const SizedBox(height: 16),
                   ],
 
-                  // Timeline Progress
+                  // ── OTP Display (shown when volunteer is assigned) ─────
+                  if (_shouldShowOtp(item.status)) ...[
+                    OtpDisplayWidget(otp: _pickupOtp),
+                    const SizedBox(height: 16),
+                  ],
+
+                  // ── 8-Step Donation Timeline ──────────────────────────
                   const Text('Donation Timeline', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 12),
                   CustomCard(
-                    child: Column(
-                      children: [
-                        _buildTimelineStep('Donation Created', true, 'Posted to community network'),
-                        _buildTimelineStep('NGO Accepted', _isStepPassed(item.status, ['accepted', 'volunteer_assigned', 'collected', 'delivered', 'completed']), item.ngoName != null ? 'Accepted by ${item.ngoName}' : 'Waiting for NGO acceptance'),
-                        _buildTimelineStep('Volunteer Assigned', _isStepPassed(item.status, ['volunteer_assigned', 'collected', 'delivered', 'completed']), item.volunteerName != null ? 'Assigned to ${item.volunteerName}' : 'Pending assignment'),
-                        _buildTimelineStep('Food Collected', _isStepPassed(item.status, ['collected', 'delivered', 'completed']), 'Picked up from donor location'),
-                        _buildTimelineStep('Food Delivered & Completed', _isStepPassed(item.status, ['delivered', 'completed']), 'Received by beneficiary organization'),
-                      ],
+                    padding: const EdgeInsets.all(16),
+                    child: StepProgressWidget(
+                      steps: _buildTimeline(item.status, item.ngoName, item.volunteerName),
                     ),
                   ),
                   const SizedBox(height: 20),
 
-                  // Pickup Location & Map
+                  // ── Pickup Location & Map ─────────────────────────────
                   const Text('Pickup Location', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   Text(item.pickupAddress, style: const TextStyle(color: Color(0xFF64748B))),
                   const SizedBox(height: 12),
-
                   OpenStreetMapWidget(
                     latitude: item.latitude ?? 12.9716,
                     longitude: item.longitude ?? 77.5946,
@@ -136,44 +209,6 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                 ],
               ),
             ),
-    );
-  }
-
-  bool _isStepPassed(String currentStatus, List<String> passedStatuses) {
-    return passedStatuses.contains(currentStatus.toLowerCase());
-  }
-
-  Widget _buildTimelineStep(String title, bool isCompleted, String subtitle) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        children: [
-          Icon(
-            isCompleted ? Icons.check_circle : Icons.radio_button_unchecked,
-            color: isCompleted ? const Color(0xFF10B981) : Colors.grey.shade400,
-            size: 24,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: isCompleted ? const Color(0xFF1E293B) : Colors.grey,
-                  ),
-                ),
-                Text(
-                  subtitle,
-                  style: TextStyle(fontSize: 12, color: isCompleted ? const Color(0xFF64748B) : Colors.grey.shade400),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

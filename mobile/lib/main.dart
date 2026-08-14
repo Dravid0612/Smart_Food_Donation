@@ -6,6 +6,7 @@ import 'providers/auth_provider.dart';
 import 'providers/donation_provider.dart';
 import 'providers/ngo_provider.dart';
 import 'providers/volunteer_provider.dart';
+import 'providers/volunteer_task_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/reward_provider.dart';
 import 'providers/admin_provider.dart';
@@ -26,6 +27,7 @@ class SmartFoodApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => DonationProvider()),
         ChangeNotifierProvider(create: (_) => NgoProvider()),
         ChangeNotifierProvider(create: (_) => VolunteerProvider()),
+        ChangeNotifierProvider(create: (_) => VolunteerTaskProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
         ChangeNotifierProvider(create: (_) => RewardProvider()),
         ChangeNotifierProvider(create: (_) => AdminProvider()),

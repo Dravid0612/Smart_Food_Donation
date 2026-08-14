@@ -119,9 +119,68 @@ class _DonorRewardsScreenState extends State<DonorRewardsScreen> {
                       subtitle: const Text('Progress from Bronze -> Silver -> Gold -> Platinum levels.'),
                     ),
                   ),
+                  const SizedBox(height: 20),
+
+                  // Environmental Impact Metrics
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Your Environmental Impact 🌿', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(height: 12),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFECFDF5),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFA7F3D0)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.co2, color: Color(0xFF059669), size: 28),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${(reward.points * 2.5).toStringAsFixed(1)} kg',
+                                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF065F46)),
+                              ),
+                              const Text('CO₂ Prevented', style: TextStyle(fontSize: 12, color: Color(0xFF047857))),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFBFDBFE)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.water_drop, color: Color(0xFF2563EB), size: 28),
+                              const SizedBox(height: 8),
+                              Text(
+                                '${(reward.points * 1000).toStringAsFixed(0)} L',
+                                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1E40AF)),
+                              ),
+                              const Text('Water Preserved', style: TextStyle(fontSize: 12, color: Color(0xFF1D4ED8))),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
               ),
             ),
     );
   }
 }
+

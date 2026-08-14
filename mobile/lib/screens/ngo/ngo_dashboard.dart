@@ -97,6 +97,47 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // Capacity Overview
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFA7F3D0)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('NGO Capacity', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF065F46))),
+                        TextButton.icon(
+                          onPressed: () => context.push('/ngo/requirements'),
+                          icon: const Icon(Icons.tune, size: 16),
+                          label: const Text('Food Requirements'),
+                          style: TextButton.styleFrom(foregroundColor: const Color(0xFF047857)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: LinearProgressIndicator(
+                        value: availableDonations.length > 0 ? 0.65 : 0.0,
+                        backgroundColor: Colors.grey.shade200,
+                        valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+                        minHeight: 10,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text('Capacity: 65% utilized • 35% available for new donations',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF047857))),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
               // Metrics Summary Grid
               GridView.count(
                 crossAxisCount: 2,
@@ -275,6 +316,13 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
                             }
                           },
                           child: const Text('Accept Food'),
+                        ),
+                      ] else if (item.status == 'collected') ...[
+                        ElevatedButton.icon(
+                          onPressed: () => context.push('/ngo/receiving/${item.id}'),
+                          icon: const Icon(Icons.task_alt),
+                          label: const Text('Confirm Receipt'),
+                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981)),
                         ),
                       ] else ...[
                         TextButton.icon(
