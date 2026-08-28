@@ -1,16 +1,25 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
 import '../../providers/donation_provider.dart';
-import '../../widgets/status_chip.dart';
-import '../../widgets/urgency_chip.dart';
-import '../../widgets/custom_card.dart';
-import '../../widgets/map_widget.dart';
-import '../../widgets/loading_indicator.dart';
-import '../../widgets/otp_display_widget.dart';
-import '../../widgets/step_progress_widget.dart';
+import '../../providers/auth_provider.dart';
+import '../../widgets/donation_status_timeline.dart';
+import '../../widgets/rescue_checklist_widget.dart';
+import '../../widgets/condition_badge.dart';
+import '../../widgets/urgency_badge.dart';
+import '../../widgets/trust_badge.dart';
+import '../../widgets/privacy_location_card.dart';
+import '../../widgets/loading_state_widget.dart';
+import '../../widgets/rescue_ring.dart';
+import '../../widgets/rescue_feedback_card.dart';
+import '../../widgets/report_problem_dialog.dart';
+import '../../core/utils/food_rescue_status_helper.dart';
+import '../../screens/donor/pickup_otp_screen.dart';
+import '../../screens/auth/phone_verification_screen.dart';
 
+/// Donor Donation Detail Screen featuring visual timeline and transparent rescue tracking.
 class DonationDetailScreen extends StatefulWidget {
   final int donationId;
   const DonationDetailScreen({super.key, required this.donationId});
@@ -20,83 +29,106 @@ class DonationDetailScreen extends StatefulWidget {
 }
 
 class _DonationDetailScreenState extends State<DonationDetailScreen> {
-  // Generate a consistent OTP per donation ID (demo only)
-  late final String _pickupOtp;
-
   @override
   void initState() {
     super.initState();
-    // Deterministic OTP based on donation ID for demo consistency
-    final rng = Random(widget.donationId * 7919);
-    _pickupOtp = (1000 + rng.nextInt(8999)).toString();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<DonationProvider>(context, listen: false)
-          .fetchDonationDetail(widget.donationId);
+      Provider.of<DonationProvider>(context, listen: false).fetchDonationDetail(widget.donationId);
     });
   }
 
-  List<StepItem> _buildTimeline(String status, String? ngoName, String? volunteerName) {
-    final s = status.toLowerCase();
-
-    StepState _state(List<String> passedStatuses) {
-      if (passedStatuses.contains(s)) return StepState.completed;
-      // Check if it's the current active step
-      final allStatuses = [
-        'pending', 'matching', 'accepted', 'volunteer_assigned',
-        'picked_up', 'collected', 'delivered', 'completed'
-      ];
-      final currentIndex = allStatuses.indexOf(s);
-      final stepIndex = allStatuses.indexWhere((st) => passedStatuses.contains(st));
-      if (stepIndex >= 0 && stepIndex == currentIndex + 1) return StepState.active;
-      return StepState.pending;
-    }
-
-    return [
-      StepItem(
-        title: 'Donation Created',
-        subtitle: 'Posted to community network',
-        state: StepState.completed,
-      ),
-      StepItem(
-        title: 'NGO Matching',
-        subtitle: 'Searching for nearby NGOs by distance & capacity',
-        state: _state(['accepted', 'volunteer_assigned', 'picked_up', 'collected', 'delivered', 'completed']),
-      ),
-      StepItem(
-        title: 'NGO Accepted',
-        subtitle: ngoName != null ? 'Accepted by $ngoName' : 'Waiting for NGO acceptance',
-        state: _state(['volunteer_assigned', 'picked_up', 'collected', 'delivered', 'completed']),
-      ),
-      StepItem(
-        title: 'Volunteer Assigned',
-        subtitle: volunteerName != null ? 'Assigned to $volunteerName' : 'Pending assignment',
-        state: _state(['picked_up', 'collected', 'delivered', 'completed']),
-      ),
-      StepItem(
-        title: 'Pickup Started',
-        subtitle: 'Volunteer en route to pickup location',
-        state: _state(['collected', 'delivered', 'completed']),
-      ),
-      StepItem(
-        title: 'Food Picked Up',
-        subtitle: 'Collected from donor location',
-        state: _state(['delivered', 'completed']),
-      ),
-      StepItem(
-        title: 'Delivered to NGO',
-        subtitle: 'Food handed over to NGO',
-        state: _state(['completed']),
-      ),
-      StepItem(
-        title: 'Completed',
-        subtitle: 'Donation successfully completed 🎉',
-        state: s == 'completed' ? StepState.completed : StepState.pending,
-      ),
+  void _showCancelDialog(BuildContext context, int donationId) {
+    String selectedReason = 'Donor unavailable';
+    final reasons = [
+      'Donor unavailable',
+      'Food spoiled / expired',
+      'Quantity mismatch',
+      'Kitchen operational issue',
+      'Other reason'
     ];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: AppTheme.card,
+          title: Text(context.tr('cancel'), style: const TextStyle(fontWeight: FontWeight.bold)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(context.tr('cancel'), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+              const SizedBox(height: 12),
+              RadioGroup<String>(
+                groupValue: selectedReason,
+                onChanged: (v) {
+                  if (v != null) setDialogState(() => selectedReason = v);
+                },
+                child: Column(
+                  children: reasons.map((r) => RadioListTile<String>(
+                    title: Text(r, style: const TextStyle(fontSize: 13)),
+                    value: r,
+                    activeColor: AppTheme.error,
+                  )).toList(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(context.tr('cancel'), style: const TextStyle(color: AppTheme.textSecondary)),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final messenger = ScaffoldMessenger.of(context);
+                final cancelledText = context.tr('status_cancelled');
+                final errText = context.trError('err_server');
+                Navigator.pop(ctx);
+                final prov = Provider.of<DonationProvider>(context, listen: false);
+                final ok = await prov.cancelDonation(donationId, selectedReason);
+                if (mounted) {
+                  messenger.showSnackBar(
+                    SnackBar(content: Text(ok ? cancelledText : errText)),
+                  );
+                }
+              },
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
+              child: Text(context.tr('confirm'), style: const TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
-  bool _shouldShowOtp(String status) {
-    return ['volunteer_assigned', 'picked_up'].contains(status.toLowerCase());
+  String _formatTimeRemaining(String? expiryStr) {
+    if (expiryStr == null) return '4h left';
+    final expiry = DateTime.tryParse(expiryStr);
+    if (expiry == null) return '4h left';
+    final diff = expiry.difference(DateTime.now());
+    if (diff.isNegative) return context.tr('status_expired');
+    if (diff.inHours > 0) return '${diff.inHours}h';
+    return '${diff.inMinutes}m';
+  }
+
+  String _getNextStepDescription(BuildContext context, String status) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+        return context.tr('why_match');
+      case 'accepted':
+        return context.tr('assigned_volunteer');
+      case 'volunteer_assigned':
+        return context.tr('assigned_volunteer');
+      case 'collected':
+        return context.tr('status_picked_up');
+      case 'delivered':
+        return context.tr('status_delivered');
+      case 'completed':
+        return context.tr('status_completed');
+      default:
+        return context.trStatus(status);
+    }
   }
 
   @override
@@ -104,111 +136,794 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
     final provider = Provider.of<DonationProvider>(context);
     final item = provider.currentDetail;
 
+    if (provider.isLoading || item == null) {
+      return Scaffold(
+        appBar: AppBar(title: Text(context.tr('donation_details'))),
+        body: LoadingStateWidget(message: context.tr('processing')),
+      );
+    }
+
+    final isPending = item.status.toLowerCase() == 'pending';
+    final isAccepted = ['accepted', 'volunteer_assigned'].contains(item.status.toLowerCase());
+    final isDelivered = ['delivered', 'completed'].contains(item.status.toLowerCase());
+    final isArrivedAtDonor = item.status.toLowerCase() == 'arrived_at_donor';
+    final timeRemaining = _formatTimeRemaining(item.expiryTime);
+
+    // Current user role
+    final authProvider = context.watch<AuthProvider>();
+    final isDonor = authProvider.user?.role == 'donor';
+    final donorPhoneVerified = authProvider.user?.phoneVerified ?? false;
+
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: const Text('Donation Details'),
+        title: Text(context.tr('donation_details')),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
+        actions: [
+          if (isPending)
+            IconButton(
+              icon: const Icon(Icons.cancel_outlined, color: AppTheme.error),
+              tooltip: context.tr('cancel'),
+              onPressed: () => _showCancelDialog(context, item.id),
+            ),
+        ],
       ),
-      body: provider.isLoading || item == null
-          ? const LoadingIndicatorWidget(message: 'Loading donation timeline...')
-          : SingleChildScrollView(
-              padding: const EdgeInsets.all(16.0),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(AppTheme.space16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── PICKUP OTP BANNER: shown when volunteer has arrived ─────────
+            if (isDonor && isArrivedAtDonor) ..._buildPickupOtpBanner(
+              context, item.id, donorPhoneVerified,
+            ),
+
+            // ── Header Card: Food Name & Quantity ───────────────────────────
+            Container(
+              padding: const EdgeInsets.all(AppTheme.space16),
+              decoration: BoxDecoration(
+                color: AppTheme.card,
+                borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                border: Border.all(color: AppTheme.border),
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Image Banner ──────────────────────────────────────
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: Image.network(
-                      item.imageUrl ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400',
-                      height: 200,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => Container(
-                        height: 180,
-                        color: Colors.grey.shade200,
-                        child: const Icon(Icons.fastfood, size: 64, color: Colors.grey),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-
-                  // ── Title & Chips ─────────────────────────────────────
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
-                        child: Text(
-                          item.foodName,
-                          style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              context.trFood(item.foodName),
+                              style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '${item.quantity.toInt()} ${context.trUnit(item.quantityUnit)}',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.primaryGreen,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      UrgencyChip(urgency: item.urgencyLevel),
+                      const SizedBox(width: AppTheme.space12),
+                      RescueRing.compact(
+                        remainingMinutes: item.remainingMinutes ??
+                            FoodRescueStatusHelper.calculateRemainingMinutes(item.expiryTime),
+                        urgencyOverride: item.urgencyLevel,
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  Row(
+                  const SizedBox(height: AppTheme.space12),
+                  Wrap(
+                    spacing: AppTheme.space8,
+                    runSpacing: AppTheme.space4,
                     children: [
-                      StatusChip(status: item.status),
-                      const SizedBox(width: 10),
-                      Text(
-                        '${item.quantity.toInt()} ${item.quantityUnit} • ${item.foodCategory}',
-                        style: const TextStyle(color: Color(0xFF64748B), fontWeight: FontWeight.w500),
+                      if (item.aiVisualCondition != null && item.aiVisualCondition!.isNotEmpty)
+                        ConditionBadge(
+                          condition: item.aiVisualCondition!,
+                          confidence: item.aiConfidenceScore,
+                        ),
+                      UrgencyBadge(
+                        level: item.urgencyLevel,
+                        remainingMinutes: item.remainingMinutes ??
+                            FoodRescueStatusHelper.calculateRemainingMinutes(item.expiryTime),
                       ),
+                      TrustBadge(label: context.tr('verified_partner'), isVerified: true),
                     ],
                   ),
-                  const SizedBox(height: 16),
-
-                  // ── Description ───────────────────────────────────────
-                  if (item.description != null && item.description!.isNotEmpty) ...[
-                    CustomCard(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Details', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                          const SizedBox(height: 6),
-                          Text(item.description!, style: const TextStyle(color: Color(0xFF475569), fontSize: 13)),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-
-                  // ── OTP Display (shown when volunteer is assigned) ─────
-                  if (_shouldShowOtp(item.status)) ...[
-                    OtpDisplayWidget(otp: _pickupOtp),
-                    const SizedBox(height: 16),
-                  ],
-
-                  // ── 8-Step Donation Timeline ──────────────────────────
-                  const Text('Donation Timeline', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 12),
-                  CustomCard(
-                    padding: const EdgeInsets.all(16),
-                    child: StepProgressWidget(
-                      steps: _buildTimeline(item.status, item.ngoName, item.volunteerName),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-
-                  // ── Pickup Location & Map ─────────────────────────────
-                  const Text('Pickup Location', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 8),
-                  Text(item.pickupAddress, style: const TextStyle(color: Color(0xFF64748B))),
-                  const SizedBox(height: 12),
-                  OpenStreetMapWidget(
-                    latitude: item.latitude ?? 12.9716,
-                    longitude: item.longitude ?? 77.5946,
-                    title: item.foodName,
-                    height: 180,
-                  ),
-                  const SizedBox(height: 30),
                 ],
               ),
             ),
+            const SizedBox(height: AppTheme.space16),
+
+            // ── Dynamic Rematching Reassurance Banner ───────────────────────
+            if (item.isRematched || item.rematchCount > 0) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.info.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.info.withValues(alpha: 0.4), width: 1.2),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.info.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.swap_horiz_rounded, color: AppTheme.info, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            context.tr('rematch_banner_title'),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.info,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            context.tr('rematch_banner_desc'),
+                            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.3),
+                          ),
+                          if (item.previousVolunteerName != null) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              'Prior Courier: ${item.previousVolunteerName} ➔ Assigned: ${item.volunteerName ?? "Assigned"}',
+                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ],
+
+            // ── Live Real-Time Rescue Tracking & Honest ETA Card ────────────
+            Container(
+              padding: const EdgeInsets.all(AppTheme.space16),
+              decoration: BoxDecoration(
+                color: AppTheme.card,
+                borderRadius: BorderRadius.circular(AppTheme.radiusFeatureCard),
+                border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
+                boxShadow: AppTheme.shadowCard,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.navigation_rounded, color: AppTheme.primaryGreen, size: 20),
+                          const SizedBox(width: AppTheme.space8),
+                          Text(
+                            context.tr('tracking_title'),
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textPrimary),
+                          ),
+                        ],
+                      ),
+                      if (item.currentEtaMinutes != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primaryGreen.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.directions_bike_rounded, color: AppTheme.primaryGreen, size: 14),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${item.currentEtaMinutes!.toInt()} min (${context.tr('tracking_eta_label')})',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.primaryGreen,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                  const Divider(height: AppTheme.space20),
+
+                  _buildTrackingDetailRow('📍 ${context.tr('pickup_address')}', item.pickupAddress),
+                  const SizedBox(height: 8),
+                  _buildTrackingDetailRow('🤝 ${context.tr('role_ngo')}', item.ngoName ?? (isPending ? context.tr('processing') : context.tr('role_ngo'))),
+                  const SizedBox(height: 8),
+                  _buildTrackingDetailRow(
+                    '🛵 ${context.tr('assigned_volunteer')}',
+                    item.volunteerName != null
+                        ? '${item.volunteerName} (${item.volunteerPhone ?? context.tr('in_progress')})'
+                        : (isPending ? context.tr('processing') : context.tr('assigned_volunteer')),
+                  ),
+                  const SizedBox(height: 8),
+                  _buildTrackingDetailRow('⏱️ ${context.tr('status')}', _getNextStepDescription(context, item.status)),
+
+                  if (item.currentDistanceKm != null) ...[
+                    const SizedBox(height: 8),
+                    _buildTrackingDetailRow(
+                      '📏 ${context.tr('tracking_distance')}',
+                      '~${item.currentDistanceKm!.toStringAsFixed(1)} km',
+                    ),
+                  ],
+
+                  // Periodic battery optimization notice
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceWarm,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.battery_charging_full_rounded, size: 13, color: AppTheme.textSecondary),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            context.tr('tracking_battery_note'),
+                            style: const TextStyle(fontSize: 10.5, color: AppTheme.textSecondary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Food Safety Declaration Badge
+                  if (item.safetyCheckCompleted) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        const Icon(Icons.check_circle_outline, color: AppTheme.success, size: 14),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${context.tr('safety_review_declaration')} ✓',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.success),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: AppTheme.space16),
+
+            // ── Progressive Disclosure Handover Card ────────────────────────
+            if (item.status == 'arrived_at_donor') ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: const Color(0xFF10B981), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.location_on, color: Color(0xFF10B981), size: 22),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            context.tr('volunteer_arrived_title').toUpperCase(),
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF10B981),
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      context.tr('volunteer_arrived_desc'),
+                      style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 48,
+                      child: ElevatedButton.icon(
+                        onPressed: () => context.push('/donor/otp/${item.id}'),
+                        icon: const Icon(Icons.lock_open_rounded, color: Colors.white, size: 20),
+                        label: Text(
+                          context.tr('show_pickup_code'),
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF10B981),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ] else if (item.status == 'pickup_en_route') ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF38BDF8).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.delivery_dining, color: Color(0xFF38BDF8), size: 22),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            context.tr('volunteer_on_the_way_title'),
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      context.tr('volunteer_on_the_way_desc'),
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                    ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () => context.push('/donor/otp/${item.id}'),
+                      icon: const Icon(Icons.pin_outlined, size: 16),
+                      label: Text(context.tr('show_pickup_code'), style: const TextStyle(fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF38BDF8),
+                        side: const BorderSide(color: Color(0xFF38BDF8)),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ] else if (['accepted', 'volunteer_assigned'].contains(item.status)) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.schedule, color: AppTheme.textSecondary, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            context.tr('pickup_scheduled'),
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            context.tr('how_step_5_desc'),
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => context.push('/donor/otp/${item.id}'),
+                      child: Text(context.tr('details'), style: const TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ],
+
+            // ── AI Visual Assessment Studio & Mandatory Disclaimer ──────────
+            if (item.aiVisualCondition != null) ...[
+              Container(
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.auto_awesome, color: AppTheme.primaryGreen, size: 18),
+                        const SizedBox(width: AppTheme.space8),
+                        Text(
+                          context.tr('ai_vision_analysis'),
+                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppTheme.space8),
+                    Text(
+                      '${context.tr('visual_condition')}: ${context.trVisual(item.aiVisualCondition!)} • ${context.tr('packaging_condition')}: ${item.packagingCondition ?? "Intact"}',
+                      style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                    ),
+                    const SizedBox(height: AppTheme.space8),
+                    Container(
+                      padding: const EdgeInsets.all(AppTheme.space8),
+                      decoration: BoxDecoration(
+                        color: AppTheme.warning.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.3)),
+                      ),
+                      child: Text(
+                        context.trDisclaimer(),
+                        style: const TextStyle(fontSize: 11, color: AppTheme.warning, fontWeight: FontWeight.bold, height: 1.3),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ],
+
+            // ── Phase 11: "WHAT HAPPENED TO MY FOOD?" Post-Completion Card ─
+            if (isDelivered) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusFeatureCard),
+                  border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.35)),
+                  boxShadow: AppTheme.shadowCard,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(color: AppTheme.successLight, shape: BoxShape.circle),
+                          child: const Icon(Icons.task_alt, color: AppTheme.success, size: 20),
+                        ),
+                        const SizedBox(width: AppTheme.space12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                context.tr('status_completed').toUpperCase(),
+                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen, letterSpacing: 0.3),
+                              ),
+                              Text(context.tr('impact_summary'), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 24),
+                    _buildTrackingDetailRow(context.tr('food_item'), '#${item.id} • ${context.trFood(item.foodName)}'),
+                    const SizedBox(height: 6),
+                    _buildTrackingDetailRow(context.tr('quantity'), '${item.quantity.toInt()} ${context.trUnit(item.quantityUnit)}'),
+                    const SizedBox(height: 6),
+                    _buildTrackingDetailRow(context.tr('role_ngo'), item.ngoName ?? 'Partner Shelter NGO'),
+                    const SizedBox(height: 6),
+                    _buildTrackingDetailRow(context.tr('status'), context.trStatus(item.status)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+
+              // ── Operational Rescue Feedback Card ──────────────────────────
+              RescueFeedbackCard(
+                donationId: item.id,
+                currentRole: 'donor',
+                onFeedbackSubmitted: () {
+                  Provider.of<DonationProvider>(context, listen: false).fetchDonationDetail(item.id);
+                },
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ] else if (['cancelled', 'failed', 'expired'].contains(item.status)) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.secondaryTerracotta.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.help_outline_rounded, color: AppTheme.secondaryTerracotta),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(context.tr('what_went_wrong'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          Text(context.tr('rate_experience_sub'), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                        ],
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        showDialog(
+                          context: context,
+                          builder: (ctx) => ReportProblemDialog(
+                            donationId: item.id,
+                            currentRole: 'donor',
+                          ),
+                        );
+                      },
+                      child: Text(context.tr('report_problem'), style: const TextStyle(fontSize: 12, color: AppTheme.secondaryTerracotta, fontWeight: FontWeight.bold)),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ],
+
+            // ── Phase 9: "WHY THIS MATCH?" Transparency Card ────────────────
+            if (isAccepted) ...[
+              Container(
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.hub_outlined, color: AppTheme.primaryGreen, size: 18),
+                        const SizedBox(width: 8),
+                        Text(context.tr('why_match').toUpperCase(), style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen, letterSpacing: 0.5)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _buildMatchFactor('✓ ${context.trCategory(item.foodCategory)}'),
+                    _buildMatchFactor('✓ ${context.trMealsCount(item.quantity.toInt())}'),
+                    _buildMatchFactor('✓ ${context.tr('verified_partner')}'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+            ],
+
+            // ── Status Timeline ─────────────────────────────────────────────
+            DonationStatusTimeline(
+              status: item.status,
+              failureReason: item.failureReason,
+            ),
+            const SizedBox(height: AppTheme.space16),
+
+            // ── Rescue Feasibility Checklist ────────────────────────────────
+            RescueChecklistWidget(
+              demandMatched: true,
+              ngoOpen: true,
+              capacityAvailable: true,
+              volunteerTransitFit: item.quantity <= 100,
+              expiryWindow: '${context.tr('rescue_window')}: $timeRemaining',
+              isTightDeadline: item.urgencyLevel == 'Urgent',
+            ),
+            const SizedBox(height: AppTheme.space16),
+
+            // ── Phase 21: Privacy & Trust Location Card ─────────────────────
+            PrivacyLocationCard(
+              locationText: item.pickupAddress,
+              isExact: true, // Donor always sees their own exact address
+            ),
+            const SizedBox(height: AppTheme.space24),
+
+            // ── Certificate & Record Button ─────────────────────────────────
+            if (isDelivered) ...[
+              ElevatedButton.icon(
+                onPressed: () => context.push('/donor/certificate/${item.id}'),
+                icon: const Icon(Icons.verified, color: Colors.white),
+                label: Text(
+                  context.tr('certificate'),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size.fromHeight(52),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 2,
+                ),
+              ),
+              const SizedBox(height: AppTheme.space24),
+            ],
+          ],
+        ),
+      ),
     );
+  }
+
+  Widget _buildTrackingDetailRow(String question, String answer) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(question, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+        const SizedBox(height: 2),
+        Text(answer, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+      ],
+    );
+  }
+
+  Widget _buildMatchFactor(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        text,
+        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.3),
+      ),
+    );
+  }
+
+  List<Widget> _buildPickupOtpBanner(BuildContext context, int donationId, bool phoneVerified) {
+    return [
+      Container(
+        margin: const EdgeInsets.only(bottom: AppTheme.space16),
+        padding: const EdgeInsets.all(AppTheme.space16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF1E3A8A), Color(0xFF4338CA)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF4338CA).withValues(alpha: 0.3),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.pin_drop, color: Colors.white, size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        context.tr('volunteer_has_arrived') != 'volunteer_has_arrived'
+                            ? context.tr('volunteer_has_arrived')
+                            : 'Volunteer Has Arrived 📍',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        phoneVerified
+                            ? 'Your pickup verification code is ready.'
+                            : 'Verify phone number for SMS or view code in app.',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => PickupOtpScreen(donationId: donationId),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.vpn_key_rounded, size: 18),
+                    label: Text(
+                      context.tr('otp_show_code'),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: const Color(0xFF1E3A8A),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+                if (!phoneVerified) ...[
+                  const SizedBox(width: 10),
+                  OutlinedButton(
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const PhoneVerificationScreen(),
+                        ),
+                      );
+                    },
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.white,
+                      side: const BorderSide(color: Colors.white70),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                    child: Text(
+                      context.tr('verify_phone_action'),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    ];
   }
 }

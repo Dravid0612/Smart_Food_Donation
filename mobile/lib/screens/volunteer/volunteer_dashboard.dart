@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/volunteer_task_provider.dart';
 import '../../providers/notification_provider.dart';
-import '../../widgets/custom_card.dart';
-import '../../widgets/status_chip.dart';
-import '../../widgets/urgency_chip.dart';
-import '../../widgets/loading_indicator.dart';
-import '../../widgets/empty_state.dart';
+import '../../widgets/availability_toggle.dart';
+import '../../widgets/vehicle_capacity_card.dart';
+import '../../widgets/donation_card.dart';
+import '../../widgets/skeleton_loader.dart';
+import '../../widgets/empty_state_widget.dart';
+import '../../widgets/role_bottom_nav.dart';
 
-enum VolunteerAvailability { available, busy, offline }
-
+/// Volunteer Courier Home Screen prioritizing the single dominant active task.
 class VolunteerDashboardScreen extends StatefulWidget {
   const VolunteerDashboardScreen({super.key});
 
@@ -20,7 +22,7 @@ class VolunteerDashboardScreen extends StatefulWidget {
 }
 
 class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
-  VolunteerAvailability _availability = VolunteerAvailability.available;
+  String _currentAvailability = 'available';
 
   @override
   void initState() {
@@ -34,20 +36,10 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
     await Future.wait([taskProv.fetchMyTasks(), notifProv.fetchNotifications()]);
   }
 
-  Color get _availabilityColor {
-    switch (_availability) {
-      case VolunteerAvailability.available: return const Color(0xFF10B981);
-      case VolunteerAvailability.busy: return const Color(0xFFF59E0B);
-      case VolunteerAvailability.offline: return const Color(0xFF64748B);
-    }
-  }
-
-  String get _availabilityLabel {
-    switch (_availability) {
-      case VolunteerAvailability.available: return '🟢  Available for Pickups';
-      case VolunteerAvailability.busy: return '🟠  Busy';
-      case VolunteerAvailability.offline: return '⚫  Offline';
-    }
+  void _onStatusChanged(String newStatus) {
+    setState(() => _currentAvailability = newStatus);
+    Provider.of<VolunteerTaskProvider>(context, listen: false)
+        .setAvailability(newStatus == 'available');
   }
 
   @override
@@ -58,38 +50,51 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
     final user = auth.currentUser;
 
     final activeTasks = taskProv.assignedTasks
-        .where((d) => ['volunteer_assigned', 'collected'].contains(d.status))
+        .where((d) => ['volunteer_assigned', 'collected'].contains(d.status.toLowerCase()))
+        .toList();
+    final availablePickups = taskProv.assignedTasks
+        .where((d) => d.status.toLowerCase() == 'accepted')
         .toList();
     final completedTasks = taskProv.assignedTasks
-        .where((d) => ['delivered', 'completed'].contains(d.status))
+        .where((d) => ['delivered', 'completed'].contains(d.status.toLowerCase()))
         .toList();
 
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(user?.name ?? 'Volunteer', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            const Text('Volunteer Portal', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+            Text(user?.name ?? context.tr('role_volunteer'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text(context.tr('verified_partner'), style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
           ],
         ),
         actions: [
-          Stack(alignment: Alignment.center, children: [
-            IconButton(
-              icon: const Icon(Icons.notifications_outlined),
-              onPressed: () => context.push('/notifications'),
-            ),
-            if (notifProv.unreadCount > 0)
-              Positioned(
-                right: 8, top: 8,
-                child: Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
-                  child: Text('${notifProv.unreadCount}',
-                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                ),
+          AvailabilityToggle(
+            currentStatus: _currentAvailability,
+            onStatusChanged: _onStatusChanged,
+          ),
+          const SizedBox(width: AppTheme.space8),
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.notifications_outlined),
+                onPressed: () => context.push('/notifications'),
               ),
-          ]),
+              if (notifProv.unreadCount > 0)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(color: AppTheme.error, shape: BoxShape.circle),
+                    child: Text('${notifProv.unreadCount}',
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+            ],
+          ),
           IconButton(icon: const Icon(Icons.account_circle_outlined), onPressed: () => context.push('/profile')),
         ],
       ),
@@ -97,195 +102,227 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
         onRefresh: _loadData,
         child: SingleChildScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppTheme.space16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── 3-State Availability Selector ────────────────────────────
-              CustomCard(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              // ── 1. VEHICLE PROFILE & CAPACITY CARD ────────────────────────
+              VehicleCapacityCard(
+                vehicleType: user?.vehicleType ?? 'Bike',
+                capacity: user?.carryingCapacity ?? 50,
+              ),
+              const SizedBox(height: AppTheme.space16),
+
+              // ── 2. ACTIVE TASK SECTION (DOMINATES SCREEN IF ACTIVE) ───────
+              if (activeTasks.isNotEmpty) ...[
+                Row(
                   children: [
-                    Row(
-                      children: [
-                        CircleAvatar(
-                          backgroundColor: _availabilityColor.withOpacity(0.15),
-                          child: Icon(Icons.directions_bike, color: _availabilityColor),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Availability', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                              Text(_availabilityLabel, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: VolunteerAvailability.values.map((status) {
-                        final labels = {
-                          VolunteerAvailability.available: '🟢 Available',
-                          VolunteerAvailability.busy: '🟠 Busy',
-                          VolunteerAvailability.offline: '⚫ Offline',
-                        };
-                        final isSelected = _availability == status;
-                        return Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 3),
-                            child: ChoiceChip(
-                              label: Text(labels[status]!, style: TextStyle(fontSize: 11, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal)),
-                              selected: isSelected,
-                              onSelected: (_) {
-                                setState(() => _availability = status);
-                                Provider.of<VolunteerTaskProvider>(context, listen: false)
-                                    .setAvailability(status == VolunteerAvailability.available);
-                              },
-                            ),
-                          ),
-                        );
-                      }).toList(),
+                    const Icon(Icons.bolt, color: AppTheme.secondaryTerracotta, size: 20),
+                    const SizedBox(width: 6),
+                    Text(
+                      context.tr('active_rescues').toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                        letterSpacing: 0.5,
+                      ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 16),
+                const SizedBox(height: AppTheme.space12),
 
-              // ── Metrics Row ──────────────────────────────────────────────
-              Row(
-                children: [
-                  Expanded(child: _metricTile('Active Tasks', '${activeTasks.length}', Icons.local_shipping, Colors.blue)),
-                  const SizedBox(width: 12),
-                  Expanded(child: _metricTile('Completed', '${completedTasks.length}', Icons.task_alt, const Color(0xFF10B981))),
-                  const SizedBox(width: 12),
-                  Expanded(child: _metricTile('Meals Moved', '${taskProv.totalMealsTransported}', Icons.restaurant, Colors.purple)),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // ── Impact Link ──────────────────────────────────────────────
-              GestureDetector(
-                onTap: () => context.push('/volunteer/impact'),
-                child: Container(
-                  padding: const EdgeInsets.all(14),
+                ...activeTasks.map((task) => Container(
+                  margin: const EdgeInsets.only(bottom: AppTheme.space16),
+                  padding: const EdgeInsets.all(AppTheme.space16),
                   decoration: BoxDecoration(
-                    gradient: const LinearGradient(colors: [Color(0xFF047857), Color(0xFF10B981)]),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Row(
-                    children: [
-                      Icon(Icons.emoji_events, color: Colors.amber),
-                      SizedBox(width: 10),
-                      Expanded(child: Text('View My Impact & Badges →', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
-                      Icon(Icons.chevron_right, color: Colors.white70),
+                    color: AppTheme.card,
+                    borderRadius: BorderRadius.circular(AppTheme.radiusFeatureCard),
+                    border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.4), width: 1.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.primaryGreen.withValues(alpha: 0.06),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
                     ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // ── Active Tasks ─────────────────────────────────────────────
-              const Text('My Active Pickups', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-
-              if (taskProv.isLoading)
-                const LoadingIndicatorWidget(message: 'Syncing your tasks...')
-              else if (activeTasks.isEmpty)
-                EmptyStateWidget(
-                  icon: Icons.directions_bike_outlined,
-                  title: _availability == VolunteerAvailability.offline
-                      ? 'You\'re Offline'
-                      : 'No Active Pickups',
-                  message: _availability == VolunteerAvailability.offline
-                      ? 'Switch to Available to receive pickup requests.'
-                      : 'No assigned food pickups right now. Stay ready!',
-                )
-              else
-                ListView.builder(
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  itemCount: activeTasks.length,
-                  itemBuilder: (ctx, i) {
-                    final item = activeTasks[i];
-                    return CustomCard(
-                      onTap: () => context.push('/volunteer/task/${item.id}'),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Row(
-                            children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(10),
-                                child: Image.network(
-                                  item.imageUrl ?? 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400',
-                                  width: 60, height: 60, fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => Container(
-                                    width: 60, height: 60, color: Colors.grey.shade200,
-                                    child: const Icon(Icons.fastfood),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(item.foodName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15), overflow: TextOverflow.ellipsis),
-                                    Text('${item.quantity.toInt()} ${item.quantityUnit} • ${item.foodCategory}',
-                                        style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                                    const SizedBox(height: 4),
-                                    Row(children: [StatusChip(status: item.status), const SizedBox(width: 8), UrgencyChip(urgency: item.urgencyLevel)]),
-                                  ],
-                                ),
-                              ),
-                              const Icon(Icons.chevron_right, color: Colors.grey),
-                            ],
+                          Expanded(
+                            child: Text(
+                              context.trFood(task.foodName),
+                              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                          const SizedBox(height: 10),
-                          const Divider(),
-                          Row(
-                            children: [
-                              const Icon(Icons.store, size: 14, color: Colors.blue),
-                              const SizedBox(width: 4),
-                              Expanded(child: Text('Pickup: ${item.pickupAddress}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)),
-                            ],
-                          ),
-                          const SizedBox(height: 3),
-                          Row(
-                            children: [
-                              const Icon(Icons.location_on, size: 14, color: Color(0xFF10B981)),
-                              const SizedBox(width: 4),
-                              Expanded(child: Text('NGO: ${item.ngoName ?? "Assigned NGO"}', style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis)),
-                            ],
+                          const SizedBox(width: 8),
+                          Text(
+                            '${task.quantity.toInt()} ${context.trUnit(task.quantityUnit)}',
+                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
                           ),
                         ],
                       ),
-                    );
-                  },
+                      const SizedBox(height: AppTheme.space12),
+                      Row(
+                        children: [
+                          const Icon(Icons.store_mall_directory_outlined, size: 16, color: AppTheme.textSecondary),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              task.pickupAddress,
+                              style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          const Icon(Icons.home_work_outlined, size: 16, color: AppTheme.primaryGreen),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              task.ngoName ?? context.tr('role_ngo'),
+                              style: const TextStyle(fontSize: 13, color: AppTheme.primaryGreen, fontWeight: FontWeight.w600),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: AppTheme.space16),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton.icon(
+                          onPressed: () => context.push('/volunteer/task/${task.id}'),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.primaryGreen,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                          ),
+                          icon: const Icon(Icons.navigation_outlined, size: 18),
+                          label: Text(context.tr('rescue_live_tracking'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+              ] else ...[
+                // ── 3. NO ACTIVE TASK: SHOW RECENT / AVAILABLE TASKS ─────────
+                Text(
+                  context.tr('active_rescues'),
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
                 ),
+                const SizedBox(height: AppTheme.space12),
+
+                if (taskProv.isLoading && taskProv.assignedTasks.isEmpty)
+                  const Column(
+                    children: [
+                      TaskCardSkeleton(),
+                      TaskCardSkeleton(),
+                    ],
+                  )
+                else if (availablePickups.isEmpty && completedTasks.isEmpty)
+                  EmptyStateWidget(
+                    icon: Icons.directions_bike_outlined,
+                    title: context.tr('no_active_deliveries'),
+                    description: context.tr('no_donations_desc'),
+                  )
+                else ...[
+                  if (availablePickups.isNotEmpty) ...[
+                    ...availablePickups.map((task) {
+                      final fitsCapacity = task.quantity <= (user?.carryingCapacity ?? 50);
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: AppTheme.space12),
+                        padding: const EdgeInsets.all(AppTheme.space16),
+                        decoration: BoxDecoration(
+                          color: AppTheme.card,
+                          borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                          border: Border.all(
+                            color: fitsCapacity ? AppTheme.primaryGreen.withValues(alpha: 0.3) : AppTheme.error.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    context.trFood(task.foodName),
+                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: fitsCapacity ? AppTheme.primaryGreen.withValues(alpha: 0.1) : AppTheme.error.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    '${task.quantity.toInt()} ${context.trUnit(task.quantityUnit)}',
+                                    style: TextStyle(
+                                      color: fitsCapacity ? AppTheme.primaryGreen : AppTheme.error,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(task.pickupAddress, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            Text(task.ngoName ?? context.tr('role_ngo'), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                            const SizedBox(height: AppTheme.space12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: () => context.push('/volunteer/request/${task.id}'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: fitsCapacity ? AppTheme.primaryGreen : Colors.grey.shade700,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                                ),
+                                child: Text(context.tr('accept_pickup'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    const SizedBox(height: AppTheme.space16),
+                  ],
+
+                  if (completedTasks.isNotEmpty) ...[
+                    Text(context.tr('status_completed'), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.textSecondary)),
+                    const SizedBox(height: AppTheme.space8),
+                    ...completedTasks.map((task) => DonationCard(
+                      foodName: task.foodName,
+                      category: task.foodCategory,
+                      quantity: task.quantity,
+                      quantityUnit: task.quantityUnit,
+                      status: task.status,
+                      locationText: task.ngoName ?? context.tr('role_ngo'),
+                    )),
+                  ],
+                ],
+              ],
             ],
           ),
         ),
       ),
-    );
-  }
-
-  Widget _metricTile(String label, String value, IconData icon, Color color) {
-    return CustomCard(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(height: 6),
-          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
-        ],
-      ),
+      bottomNavigationBar: const RoleBottomNav(currentRole: 'volunteer', currentIndex: 0),
     );
   }
 }

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  final String? initialRole;
+  const RegisterScreen({super.key, this.initialRole});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -19,8 +22,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _confirmPasswordController = TextEditingController();
   final _addressController = TextEditingController();
   final _orgNameController = TextEditingController();
+  final _capacityController = TextEditingController(text: '100');
 
   String _selectedRole = 'donor'; // donor, ngo, volunteer
+  String _selectedVehicleType = 'bike'; // walking, bike, car, van
+  int _selectedCarryingCapacity = 50; // 10, 50, 150, 500
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialRole != null &&
+        ['donor', 'ngo', 'volunteer'].contains(widget.initialRole!.toLowerCase())) {
+      _selectedRole = widget.initialRole!.toLowerCase();
+    }
+  }
 
   @override
   void dispose() {
@@ -31,6 +46,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     _confirmPasswordController.dispose();
     _addressController.dispose();
     _orgNameController.dispose();
+    _capacityController.dispose();
     super.dispose();
   }
 
@@ -39,7 +55,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (_passwordController.text != _confirmPasswordController.text) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Passwords do not match'), backgroundColor: Colors.redAccent),
+        SnackBar(content: Text(context.tr('password_mismatch')), backgroundColor: AppTheme.error),
       );
       return;
     }
@@ -53,6 +69,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
       role: _selectedRole,
       address: _addressController.text.trim(),
       organizationName: _selectedRole == 'ngo' ? _orgNameController.text.trim() : null,
+      capacity: _selectedRole == 'ngo' ? int.tryParse(_capacityController.text) ?? 100 : null,
+      vehicleType: _selectedRole == 'volunteer' ? _selectedVehicleType : null,
+      carryingCapacity: _selectedRole == 'volunteer' ? _selectedCarryingCapacity : null,
     );
 
     if (!mounted) return;
@@ -75,8 +94,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(authProvider.errorMessage ?? 'Registration failed'),
-          backgroundColor: Colors.redAccent,
+          content: Text(context.trError(authProvider.errorMessage ?? 'Registration failed')),
+          backgroundColor: AppTheme.error,
         ),
       );
     }
@@ -89,7 +108,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text('Create Account'),
+        title: Text(context.tr('register')),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.go('/login'),
@@ -103,55 +122,147 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text(
-                  'Join the Mission',
-                  style: TextStyle(
-                    fontSize: 24,
+                Text(
+                  context.tr('join_mission'),
+                  style: const TextStyle(
+                    fontSize: 22,
                     fontWeight: FontWeight.bold,
                     color: Color(0xFF1E293B),
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Select your role to get started',
-                  style: TextStyle(color: Color(0xFF64748B)),
+                Text(
+                  context.tr('select_role'),
+                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
 
                 // Role Selector Segmented Buttons
                 SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'donor', label: Text('Donor'), icon: Icon(Icons.volunteer_activism)),
-                    ButtonSegment(value: 'ngo', label: Text('NGO'), icon: Icon(Icons.maps_home_work)),
-                    ButtonSegment(value: 'volunteer', label: Text('Volunteer'), icon: Icon(Icons.directions_bike)),
+                  segments: [
+                    ButtonSegment(value: 'donor', label: Text(context.trRole('donor')), icon: const Icon(Icons.volunteer_activism)),
+                    ButtonSegment(value: 'ngo', label: Text(context.trRole('ngo')), icon: const Icon(Icons.maps_home_work)),
+                    ButtonSegment(value: 'volunteer', label: Text(context.trRole('volunteer')), icon: const Icon(Icons.directions_bike)),
                   ],
                   selected: {_selectedRole},
                   onSelectionChanged: (Set<String> newSelection) {
                     setState(() => _selectedRole = newSelection.first);
                   },
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
+
+                // Notice for NGO
+                if (_selectedRole == 'ngo') ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.amber.shade300),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.verified_user_outlined, color: Color(0xFFB45309), size: 20),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            context.tr('why_verify'),
+                            style: const TextStyle(color: Color(0xFF92400E), fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
 
                 // Name / Contact Name
                 TextFormField(
                   controller: _nameController,
                   decoration: InputDecoration(
-                    labelText: _selectedRole == 'ngo' ? 'Contact Person Name' : 'Full Name',
+                    labelText: _selectedRole == 'donor'
+                        ? '${context.tr('full_name')} / ${context.tr('role_donor')}'
+                        : _selectedRole == 'ngo'
+                            ? '${context.tr('full_name')} (NGO)'
+                            : context.tr('full_name'),
                     prefixIcon: const Icon(Icons.person_outline),
                   ),
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                  validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
                 ),
                 const SizedBox(height: 16),
 
-                // NGO Organization Name
+                // NGO Organization Name & Capacity
                 if (_selectedRole == 'ngo') ...[
                   TextFormField(
                     controller: _orgNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Organization Name',
-                      prefixIcon: Icon(Icons.business),
+                    decoration: InputDecoration(
+                      labelText: '${context.tr('role_ngo')} ${context.tr('full_name')}',
+                      prefixIcon: const Icon(Icons.business),
                     ),
-                    validator: (v) => v == null || v.trim().isEmpty ? 'Required for NGO' : null,
+                    validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
+                  ),
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _capacityController,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: '${context.tr('payload_capacity')} (${context.tr('unit_meals')})',
+                      prefixIcon: const Icon(Icons.storage),
+                    ),
+                    validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // Volunteer Vehicle & Capacity Fields
+                if (_selectedRole == 'volunteer') ...[
+                  DropdownButtonFormField<String>(
+                    initialValue: _selectedVehicleType,
+                    decoration: InputDecoration(
+                      labelText: context.tr('vehicle_type'),
+                      prefixIcon: const Icon(Icons.directions_car),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'walking', child: Text('Walking / On Foot')),
+                      DropdownMenuItem(value: 'bike', child: Text('Two-Wheeler / Motorbike')),
+                      DropdownMenuItem(value: 'car', child: Text('Four-Wheeler / Car')),
+                      DropdownMenuItem(value: 'van', child: Text('Van / Mini-Truck')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() {
+                          _selectedVehicleType = val;
+                          if (val == 'walking') {
+                            _selectedCarryingCapacity = 10;
+                          } else if (val == 'bike') {
+                            _selectedCarryingCapacity = 50;
+                          } else if (val == 'car') {
+                            _selectedCarryingCapacity = 150;
+                          } else if (val == 'van') {
+                            _selectedCarryingCapacity = 500;
+                          }
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<int>(
+                    initialValue: _selectedCarryingCapacity,
+                    decoration: InputDecoration(
+                      labelText: context.tr('payload_capacity'),
+                      prefixIcon: const Icon(Icons.fitness_center),
+                    ),
+                    items: [
+                      DropdownMenuItem(value: 10, child: Text('10 ${context.tr('unit_meals')} (Compact)')),
+                      DropdownMenuItem(value: 50, child: Text('50 ${context.tr('unit_meals')} (Medium - Bike)')),
+                      DropdownMenuItem(value: 150, child: Text('150 ${context.tr('unit_meals')} (Large - Car)')),
+                      DropdownMenuItem(value: 500, child: Text('500 ${context.tr('unit_meals')} (Bulk - Van)')),
+                    ],
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() => _selectedCarryingCapacity = val);
+                      }
+                    },
                   ),
                   const SizedBox(height: 16),
                 ],
@@ -160,11 +271,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 TextFormField(
                   controller: _emailController,
                   keyboardType: TextInputType.emailAddress,
-                  decoration: const InputDecoration(
-                    labelText: 'Email Address',
-                    prefixIcon: Icon(Icons.email_outlined),
+                  decoration: InputDecoration(
+                    labelText: context.tr('email'),
+                    prefixIcon: const Icon(Icons.email_outlined),
                   ),
-                  validator: (v) => v == null || !v.contains('@') ? 'Enter valid email' : null,
+                  validator: (v) => v == null || !v.contains('@') ? context.tr('enter_email') : null,
                 ),
                 const SizedBox(height: 16),
 
@@ -172,21 +283,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 TextFormField(
                   controller: _phoneController,
                   keyboardType: TextInputType.phone,
-                  decoration: const InputDecoration(
-                    labelText: 'Phone Number',
-                    prefixIcon: Icon(Icons.phone_outlined),
+                  decoration: InputDecoration(
+                    labelText: context.tr('phone_number'),
+                    prefixIcon: const Icon(Icons.phone_outlined),
                   ),
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Required' : null,
+                  validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
                 ),
                 const SizedBox(height: 16),
 
                 // Address
                 TextFormField(
                   controller: _addressController,
-                  decoration: const InputDecoration(
-                    labelText: 'Address / Location',
-                    prefixIcon: Icon(Icons.location_on_outlined),
+                  decoration: InputDecoration(
+                    labelText: context.tr('pickup_address'),
+                    prefixIcon: const Icon(Icons.location_on_outlined),
                   ),
+                  validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
                 ),
                 const SizedBox(height: 16),
 
@@ -194,11 +306,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 TextFormField(
                   controller: _passwordController,
                   obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Password',
-                    prefixIcon: Icon(Icons.lock_outline),
+                  decoration: InputDecoration(
+                    labelText: context.tr('password'),
+                    prefixIcon: const Icon(Icons.lock_outline),
                   ),
-                  validator: (v) => v == null || v.length < 6 ? 'Password must be >= 6 chars' : null,
+                  validator: (v) => v == null || v.length < 6 ? context.tr('enter_password') : null,
                 ),
                 const SizedBox(height: 16),
 
@@ -206,13 +318,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 TextFormField(
                   controller: _confirmPasswordController,
                   obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Confirm Password',
-                    prefixIcon: Icon(Icons.lock_outline),
+                  decoration: InputDecoration(
+                    labelText: context.tr('confirm_password'),
+                    prefixIcon: const Icon(Icons.lock_outline),
                   ),
-                  validator: (v) => v == null || v.isEmpty ? 'Please confirm password' : null,
+                  validator: (v) => v == null || v.isEmpty ? context.tr('confirm_password') : null,
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
 
                 // Register Button
                 ElevatedButton(
@@ -223,7 +335,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           width: 20,
                           child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                         )
-                      : const Text('Complete Registration'),
+                      : Text(context.tr('register')),
                 ),
               ],
             ),

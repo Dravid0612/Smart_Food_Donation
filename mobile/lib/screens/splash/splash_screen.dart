@@ -32,6 +32,7 @@ class _SplashScreenState extends State<SplashScreen> {
       return;
     }
 
+    if (!mounted) return;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final isAuthenticated = await authProvider.checkAuthStatus();
 
@@ -81,9 +82,9 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
             ),
             const SizedBox(height: 24),
-            Text(
+            const Text(
               AppConstants.appName,
-              style: const TextStyle(
+              style: TextStyle(
                 color: Colors.white,
                 fontSize: 28,
                 fontWeight: FontWeight.bold,

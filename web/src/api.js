@@ -4,7 +4,7 @@ const API_BASE = 'http://127.0.0.1:8000/api';
 async function request(endpoint, options = {}) {
   const token = localStorage.getItem('auth_token');
   const headers = {
-    'Content-Type': 'application/json',
+    ...(options.isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...options.headers
   };
@@ -35,6 +35,13 @@ export const api = {
     return data;
   },
 
+  // AI Food Vision Analysis
+  analyzeFood: (formData) => request('/ai/analyze-food', {
+    method: 'POST',
+    body: formData,
+    isFormData: true,
+  }),
+
   // Donations
   getDonations: () => request('/donations'),
   createDonation: (data) => request('/donations', { method: 'POST', body: JSON.stringify(data) }),
@@ -42,6 +49,31 @@ export const api = {
   runBatchMatching: () => request('/donations/batch-match/run'),
   getBatchedRoutes: () => request('/donations/batched-routes/optimize'),
   acceptDonation: (id) => request(`/donations/${id}/accept`, { method: 'POST' }),
+  escalateDonation: (id) => request(`/donations/${id}/escalate`, { method: 'POST' }),
+  cancelDonation: (id, reason) => request(`/donations/${id}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason })
+  }),
+
+  // NGO Schedule & Demands
+  updateNgoHours: (ngoId, schedule) => request(`/ngos/${ngoId}/operating-hours`, {
+    method: 'PUT',
+    body: JSON.stringify({ operating_hours: schedule })
+  }),
+  updateNgoDemands: (ngoId, demands) => request(`/ngos/${ngoId}/demands`, {
+    method: 'PUT',
+    body: JSON.stringify({ demand_requirements: demands })
+  }),
+
+  // Volunteers & Handover Verification
+  verifyOtp: (donationId, otp) => request('/volunteers/verify-otp', {
+    method: 'POST',
+    body: JSON.stringify({ donation_id: donationId, otp })
+  }),
+  reportFailure: (donationId, failureType, reason, remarks) => request(`/volunteers/report-failure?donation_id=${donationId}`, {
+    method: 'POST',
+    body: JSON.stringify({ failure_type: failureType, reason, remarks })
+  }),
 
   // Admin
   getStats: () => request('/admin/statistics'),
@@ -49,3 +81,4 @@ export const api = {
   getUsers: () => request('/admin/users'),
   getNgos: () => request('/admin/ngos'),
 };
+

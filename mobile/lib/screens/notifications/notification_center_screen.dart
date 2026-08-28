@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/notification_provider.dart';
 import '../../widgets/custom_card.dart';
-import '../../widgets/loading_indicator.dart';
-import '../../widgets/empty_state.dart';
+import '../../widgets/skeleton_loader.dart';
+import '../../widgets/empty_state_widget.dart';
 
 class NotificationCenterScreen extends StatefulWidget {
   const NotificationCenterScreen({super.key});
@@ -28,8 +31,9 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
     final notifications = notifProv.notifications;
 
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: const Text('Notifications'),
+        title: Text(context.tr('notifications')),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
@@ -38,17 +42,28 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
           if (notifications.isNotEmpty)
             TextButton(
               onPressed: () => notifProv.markAllAsRead(),
-              child: const Text('Mark all as read'),
+              child: Text(
+                context.tr('mark_all_read'),
+                style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.primaryGreen),
+              ),
             ),
         ],
       ),
-      body: notifProv.isLoading
-          ? const LoadingIndicatorWidget(message: 'Syncing notifications...')
+      body: notifProv.isLoading && notifications.isEmpty
+          ? ListView(
+              padding: const EdgeInsets.all(16),
+              children: const [
+                NotificationItemSkeleton(),
+                NotificationItemSkeleton(),
+                NotificationItemSkeleton(),
+                NotificationItemSkeleton(),
+              ],
+            )
           : notifications.isEmpty
               ? EmptyStateWidget(
                   icon: Icons.notifications_off_outlined,
-                  title: 'No Notifications',
-                  message: 'You have no notifications at this time.',
+                  title: context.tr('no_notifications'),
+                  description: context.tr('no_notifications_desc'),
                 )
               : ListView.builder(
                   padding: const EdgeInsets.all(16),
@@ -59,7 +74,19 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
                       onTap: () {
                         notifProv.markAsRead(item.id);
                         if (item.relatedDonationId != null) {
-                          context.push('/donor/detail/${item.relatedDonationId}');
+                          final auth = Provider.of<AuthProvider>(context, listen: false);
+                          final role = auth.currentUser?.role ?? 'donor';
+                          final type = item.type.toLowerCase();
+
+                          if (type == 'volunteer_arrived' && role == 'donor') {
+                            context.push('/donor/otp/${item.relatedDonationId}');
+                          } else if (role == 'volunteer') {
+                            context.push('/volunteer/task/${item.relatedDonationId}');
+                          } else if (role == 'ngo') {
+                            context.push('/ngo/receiving/${item.relatedDonationId}');
+                          } else {
+                            context.push('/donor/detail/${item.relatedDonationId}');
+                          }
                         }
                       },
                       child: Row(
@@ -68,7 +95,7 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
                           Container(
                             padding: const EdgeInsets.all(10),
                             decoration: BoxDecoration(
-                              color: item.isRead ? Colors.grey.shade100 : const Color(0xFF10B981).withOpacity(0.12),
+                              color: item.isRead ? Colors.grey.shade100 : const Color(0xFF10B981).withValues(alpha: 0.12),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
@@ -120,12 +147,20 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
 
   IconData _getNotifIcon(String type) {
     switch (type.toLowerCase()) {
-      case 'success':
-        return Icons.check_circle_outline;
-      case 'donation':
-        return Icons.fastfood_outlined;
+      case 'volunteer_arrived':
+      case 'arrived':
+        return Icons.location_on;
+      case 'pickup_en_route':
+      case 'en_route':
       case 'assignment':
         return Icons.directions_bike;
+      case 'success':
+      case 'collected':
+      case 'delivered':
+        return Icons.check_circle_outline;
+      case 'donation':
+      case 'created':
+        return Icons.fastfood_outlined;
       default:
         return Icons.notifications_outlined;
     }

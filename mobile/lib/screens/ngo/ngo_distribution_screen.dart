@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
 import '../../providers/donation_provider.dart';
-import '../../widgets/custom_card.dart';
-import '../../widgets/loading_indicator.dart';
+import '../../widgets/primary_action_button.dart';
+import '../../widgets/loading_state_widget.dart';
+import '../../widgets/rescue_feedback_card.dart';
 
+/// NGO Screen for recording meal distribution to beneficiaries.
 class NgoDistributionScreen extends StatefulWidget {
   final int donationId;
   const NgoDistributionScreen({super.key, required this.donationId});
@@ -20,7 +23,6 @@ class _NgoDistributionScreenState extends State<NgoDistributionScreen> {
   final _beneficiariesController = TextEditingController();
   bool _isSubmitting = false;
 
-  // Simulated previous distributions for this donation
   final List<Map<String, dynamic>> _distributions = [];
   int _totalReceived = 80;
   int _totalDistributed = 0;
@@ -50,7 +52,7 @@ class _NgoDistributionScreenState extends State<NgoDistributionScreen> {
     final qty = int.tryParse(_distributedController.text.trim()) ?? 0;
     if (qty <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid quantity to distribute'), backgroundColor: Colors.redAccent),
+        SnackBar(content: Text(context.tr('field_required')), backgroundColor: AppTheme.error),
       );
       return;
     }
@@ -58,35 +60,55 @@ class _NgoDistributionScreenState extends State<NgoDistributionScreen> {
     if (qty > remaining) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Cannot distribute more than remaining ($remaining)'),
-          backgroundColor: Colors.redAccent,
+          content: Text('${context.tr('remaining_time')}: $remaining'),
+          backgroundColor: AppTheme.error,
         ),
       );
       return;
     }
 
+    final beneficiaries = int.tryParse(_beneficiariesController.text.trim()) ?? qty;
+    final location = _locationController.text.trim().isEmpty ? 'Community Shelter' : _locationController.text.trim();
+
     setState(() => _isSubmitting = true);
-    await Future.delayed(const Duration(milliseconds: 800)); // API call placeholder
+    final prov = Provider.of<DonationProvider>(context, listen: false);
+    final ok = await prov.recordDistribution(
+      donationId: widget.donationId,
+      distributedQuantity: (_totalDistributed + qty).toDouble(),
+      receivedQuantity: _totalReceived.toDouble(),
+      remainingQuantity: (remaining - qty).toDouble(),
+      beneficiariesServed: beneficiaries,
+      remarks: 'Distributed at $location',
+    );
 
-    setState(() {
-      _distributions.add({
-        'qty': qty,
-        'location': _locationController.text.trim().isEmpty ? 'Community Center' : _locationController.text.trim(),
-        'beneficiaries': int.tryParse(_beneficiariesController.text.trim()) ?? qty,
-        'time': DateTime.now(),
+    if (!mounted) return;
+    setState(() => _isSubmitting = false);
+
+    if (ok) {
+      setState(() {
+        _distributions.add({
+          'qty': qty,
+          'location': location,
+          'beneficiaries': beneficiaries,
+          'time': DateTime.now(),
+        });
+        _totalDistributed += qty;
+        _distributedController.clear();
+        _locationController.clear();
+        _beneficiariesController.clear();
       });
-      _totalDistributed += qty;
-      _isSubmitting = false;
-      _distributedController.clear();
-      _locationController.clear();
-      _beneficiariesController.clear();
-    });
 
-    if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('✅ $qty meals recorded as distributed!'),
-          backgroundColor: const Color(0xFF10B981),
+          content: Text('✅ $qty ${context.trUnit('Meals')} ${context.tr('status_completed')}!'),
+          backgroundColor: AppTheme.primaryGreen,
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(context.trError(prov.errorMessage ?? 'err_server')),
+          backgroundColor: AppTheme.error,
         ),
       );
     }
@@ -99,144 +121,99 @@ class _NgoDistributionScreenState extends State<NgoDistributionScreen> {
     final progress = _totalReceived > 0 ? _totalDistributed / _totalReceived : 0.0;
 
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: const Text('Distribution Management'),
+        title: Text(context.tr('distribute_meals')),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
       ),
       body: prov.isLoading
-          ? const LoadingIndicatorWidget(message: 'Loading...')
+          ? LoadingStateWidget(message: context.tr('processing'))
           : SingleChildScrollView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(AppTheme.space16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Distribution overview
+                  // Progress Card
                   Container(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(AppTheme.space20),
                     decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF047857), Color(0xFF10B981)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.circular(20),
+                      color: AppTheme.card,
+                      borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                      border: Border.all(color: AppTheme.border),
+                      boxShadow: AppTheme.shadowCard,
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Distribution Progress', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                        const SizedBox(height: 12),
+                        Text(
+                          context.tr('distribution_summary'),
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary, letterSpacing: -0.2),
+                        ),
+                        const SizedBox(height: AppTheme.space16),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceAround,
                           children: [
-                            _statBlock('$_totalReceived', 'Total\nReceived', Colors.white),
-                            _statBlock('$_totalDistributed', 'Distributed', const Color(0xFF6EE7B7)),
-                            _statBlock('$remaining', 'Remaining', remaining > 0 ? Colors.amber : const Color(0xFF6EE7B7)),
+                            _statBlock('$_totalReceived', context.tr('meals_received'), AppTheme.textPrimary),
+                            Container(width: 1, height: 36, color: AppTheme.divider),
+                            _statBlock('$_totalDistributed', context.tr('meals_distributed'), AppTheme.primaryGreen),
+                            Container(width: 1, height: 36, color: AppTheme.divider),
+                            _statBlock('$remaining', context.tr('meals_remaining'), remaining > 0 ? AppTheme.secondaryTerracotta : AppTheme.textSecondary),
                           ],
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: AppTheme.space16),
                         ClipRRect(
-                          borderRadius: BorderRadius.circular(6),
+                          borderRadius: BorderRadius.circular(AppTheme.radiusPill),
                           child: LinearProgressIndicator(
                             value: progress.clamp(0.0, 1.0),
-                            backgroundColor: Colors.white24,
-                            valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-                            minHeight: 10,
+                            backgroundColor: AppTheme.background,
+                            valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryGreen),
+                            minHeight: 8,
                           ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '${(progress * 100).toInt()}% distributed',
-                          style: const TextStyle(color: Colors.white70, fontSize: 12),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppTheme.space24),
 
-                  const Text('Record New Distribution', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 16),
+                  Text(context.tr('distribute_meals'), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                  const SizedBox(height: AppTheme.space16),
 
                   TextFormField(
                     controller: _distributedController,
                     keyboardType: TextInputType.number,
                     decoration: InputDecoration(
-                      labelText: 'Meals Distributed *',
-                      hintText: 'Remaining: $remaining meals',
+                      labelText: context.tr('quantity'),
+                      hintText: '${context.tr('remaining_time')}: $remaining',
                       prefixIcon: const Icon(Icons.restaurant_outlined),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppTheme.space12),
 
                   TextFormField(
                     controller: _locationController,
-                    decoration: const InputDecoration(
-                      labelText: 'Distribution Location',
-                      hintText: 'e.g. Community Center, Shelter',
-                      prefixIcon: Icon(Icons.location_on_outlined),
+                    decoration: InputDecoration(
+                      labelText: context.tr('pickup_address'),
+                      prefixIcon: const Icon(Icons.location_on_outlined),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: AppTheme.space24),
 
-                  TextFormField(
-                    controller: _beneficiariesController,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      labelText: 'Beneficiaries Served',
-                      hintText: 'Number of people served',
-                      prefixIcon: Icon(Icons.people_outline),
-                    ),
+                  PrimaryActionButton(
+                    label: context.tr('distribute_meals').toUpperCase(),
+                    icon: Icons.check_circle_outline,
+                    isLoading: _isSubmitting,
+                    onPressed: remaining == 0 ? null : _recordDistribution,
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: AppTheme.space16),
 
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: _isSubmitting || remaining == 0 ? null : _recordDistribution,
-                      icon: _isSubmitting
-                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : const Icon(Icons.add_task),
-                      label: Text(remaining == 0 ? 'All Meals Distributed!' : 'Record Distribution'),
-                    ),
+                  // Rescue Feedback & Rating
+                  RescueFeedbackCard(
+                    donationId: widget.donationId,
+                    currentRole: 'ngo',
                   ),
-
-                  if (_distributions.isNotEmpty) ...[
-                    const SizedBox(height: 28),
-                    const Text('Distribution History', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 12),
-                    ..._distributions.reversed.map((d) => CustomCard(
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 48,
-                                height: 48,
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFFECFDF5),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.check, color: Color(0xFF10B981)),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text('${d['qty']} meals at ${d['location']}',
-                                        style: const TextStyle(fontWeight: FontWeight.bold)),
-                                    Text(
-                                      '${d['beneficiaries']} people served • ${DateFormat('hh:mm a').format(d['time'] as DateTime)}',
-                                      style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        )),
-                  ],
                 ],
               ),
             ),
@@ -246,8 +223,9 @@ class _NgoDistributionScreenState extends State<NgoDistributionScreen> {
   Widget _statBlock(String value, String label, Color color) {
     return Column(
       children: [
-        Text(value, style: TextStyle(color: color, fontSize: 28, fontWeight: FontWeight.bold)),
-        Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11), textAlign: TextAlign.center),
+        Text(value, style: TextStyle(color: color, fontSize: 24, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 2),
+        Text(label, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11), textAlign: TextAlign.center),
       ],
     );
   }

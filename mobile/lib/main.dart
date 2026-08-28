@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
+import 'core/localization/app_locale.dart';
 import 'core/theme/app_theme.dart';
 import 'core/routes/app_router.dart';
 import 'providers/auth_provider.dart';
@@ -23,6 +25,7 @@ class SmartFoodApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider(create: (_) => LocaleProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => DonationProvider()),
         ChangeNotifierProvider(create: (_) => NgoProvider()),
@@ -32,11 +35,22 @@ class SmartFoodApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => RewardProvider()),
         ChangeNotifierProvider(create: (_) => AdminProvider()),
       ],
-      child: MaterialApp.router(
-        title: 'Smart Food Donation',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.lightTheme,
-        routerConfig: appRouter,
+      child: Consumer<LocaleProvider>(
+        builder: (context, localeProv, _) {
+          return MaterialApp.router(
+            title: localeProv.translate('app_title'),
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.lightTheme,
+            routerConfig: appRouter,
+            locale: localeProv.locale,
+            supportedLocales: LocaleProvider.supportedLocales,
+            localizationsDelegates: const [
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+          );
+        },
       ),
     );
   }

@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
 import '../../providers/ngo_provider.dart';
-import '../../widgets/custom_card.dart';
-import '../../widgets/loading_indicator.dart';
+import '../../widgets/primary_action_button.dart';
 
+/// Simple, effective NGO Demand & Requirements Editor with steppers.
 class NgoFoodRequirementsScreen extends StatefulWidget {
   const NgoFoodRequirementsScreen({super.key});
 
@@ -13,181 +15,124 @@ class NgoFoodRequirementsScreen extends StatefulWidget {
 }
 
 class _NgoFoodRequirementsScreenState extends State<NgoFoodRequirementsScreen> {
-  // Each food type maps to a required quantity
-  final Map<String, int> _requirements = {
-    'Cooked Rice Meals': 100,
-    'Bread & Bakery': 50,
-    'Packaged Food': 80,
+  final Map<String, int> _demands = {
+    'Rice': 100,
+    'Bread': 50,
     'Fruits': 30,
     'Vegetables': 40,
-    'Cooked Non-Veg': 60,
+    'Meals': 80,
   };
 
-  // Simulated received amounts (would come from backend in production)
-  final Map<String, int> _received = {
-    'Cooked Rice Meals': 35,
-    'Bread & Bakery': 20,
-    'Packaged Food': 60,
-    'Fruits': 10,
-    'Vegetables': 15,
-    'Cooked Non-Veg': 20,
+  final Map<String, Map<String, String>> _operatingHours = {
+    'monday': {'open': '09:00', 'close': '21:00', 'status': 'open'},
+    'tuesday': {'open': '09:00', 'close': '21:00', 'status': 'open'},
+    'wednesday': {'open': '09:00', 'close': '21:00', 'status': 'open'},
+    'thursday': {'open': '09:00', 'close': '21:00', 'status': 'open'},
+    'friday': {'open': '09:00', 'close': '21:00', 'status': 'open'},
+    'saturday': {'open': '10:00', 'close': '22:00', 'status': 'open'},
+    'sunday': {'open': '10:00', 'close': '18:00', 'status': 'open'},
   };
 
   bool _isSaving = false;
 
-  Future<void> _saveRequirements() async {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ngoProv = Provider.of<NgoProvider>(context, listen: false);
+      if (ngoProv.ngos.isNotEmpty) {
+        final myNgo = ngoProv.ngos.first;
+        if (myNgo.demandRequirements != null && myNgo.demandRequirements!.isNotEmpty) {
+          setState(() {
+            myNgo.demandRequirements!.forEach((k, v) {
+              _demands[k] = (v as num).toInt();
+            });
+          });
+        }
+      }
+    });
+  }
+
+  Future<void> _saveAll() async {
     setState(() => _isSaving = true);
-    // In production: call ngoProvider.updateFoodRequirements(_requirements)
-    await Future.delayed(const Duration(seconds: 1));
+    final ngoProv = Provider.of<NgoProvider>(context, listen: false);
+    final ngoId = ngoProv.ngos.isNotEmpty ? ngoProv.ngos.first.id : 1;
+
+    final okDemands = await ngoProv.updateDemands(ngoId, _demands);
+    final okHours = await ngoProv.updateOperatingHours(ngoId, _operatingHours);
+
     if (mounted) {
       setState(() => _isSaving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Food requirements saved! Smart matching updated.'),
-          backgroundColor: Color(0xFF10B981),
-        ),
-      );
+      if (okDemands && okHours) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ ${context.tr('confirm')}!'),
+            backgroundColor: AppTheme.primaryGreen,
+          ),
+        );
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: const Text('Food Requirements'),
+        title: Text(context.tr('food_category')),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
-        actions: [
-          TextButton(
-            onPressed: _isSaving ? null : _saveRequirements,
-            child: _isSaving
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('Save', style: TextStyle(fontWeight: FontWeight.bold)),
-          ),
-        ],
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTheme.space16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: const Color(0xFFECFDF5),
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFA7F3D0)),
-              ),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.auto_awesome, color: Color(0xFF10B981), size: 20),
-                      SizedBox(width: 8),
-                      Text('Smart Matching Enabled',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF065F46))),
-                    ],
-                  ),
-                  SizedBox(height: 6),
-                  Text(
-                    'Set how much of each food type your NGO needs. The smart matching system will prioritize donations that meet your requirements.',
-                    style: TextStyle(color: Color(0xFF047857), fontSize: 12),
-                  ),
-                ],
-              ),
+            // ── Section 1: Demand Steppers ──────────────────────────────────
+            Text(
+              context.tr('food_category'),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: AppTheme.space16),
 
-            const Text('Required Quantities', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            const Text('Set how many meals/units you need for each category.',
-                style: TextStyle(color: Color(0xFF64748B), fontSize: 13)),
-            const SizedBox(height: 16),
+            ..._demands.entries.map((entry) {
+              final cat = entry.key;
+              final qty = entry.value;
 
-            // Requirements list
-            ..._requirements.entries.map((entry) {
-              final foodType = entry.key;
-              final required = entry.value;
-              final received = _received[foodType] ?? 0;
-              final progress = (received / required).clamp(0.0, 1.0);
-              final isMet = received >= required;
-
-              return CustomCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              return Container(
+                margin: const EdgeInsets.only(bottom: AppTheme.space12),
+                padding: const EdgeInsets.symmetric(horizontal: AppTheme.space16, vertical: AppTheme.space12),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(foodType,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                        ),
-                        if (isMet)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFD1FAE5),
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: const Text('Need Met ✓',
-                                style: TextStyle(color: Color(0xFF047857), fontSize: 11, fontWeight: FontWeight.bold)),
-                          ),
-                      ],
+                    Text(
+                      context.trFood(cat),
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
                     ),
-                    const SizedBox(height: 10),
                     Row(
                       children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text('Received: $received',
-                                      style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                                  Text('Required: $required',
-                                      style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(4),
-                                child: LinearProgressIndicator(
-                                  value: progress,
-                                  backgroundColor: Colors.grey.shade200,
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                    isMet ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                                  ),
-                                  minHeight: 8,
-                                ),
-                              ),
-                            ],
+                        IconButton(
+                          onPressed: qty > 0 ? () => setState(() => _demands[cat] = qty - 10) : null,
+                          icon: const Icon(Icons.remove_circle_outline, color: AppTheme.textSecondary),
+                        ),
+                        Container(
+                          constraints: const BoxConstraints(minWidth: 50),
+                          alignment: Alignment.center,
+                          child: Text(
+                            '$qty',
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
                           ),
                         ),
-                        const SizedBox(width: 16),
-                        SizedBox(
-                          width: 80,
-                          child: TextFormField(
-                            initialValue: required.toString(),
-                            keyboardType: TextInputType.number,
-                            textAlign: TextAlign.center,
-                            decoration: InputDecoration(
-                              contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                              isDense: true,
-                            ),
-                            onChanged: (val) {
-                              final n = int.tryParse(val);
-                              if (n != null && n > 0) {
-                                setState(() => _requirements[foodType] = n);
-                              }
-                            },
-                          ),
+                        IconButton(
+                          onPressed: () => setState(() => _demands[cat] = qty + 10),
+                          icon: const Icon(Icons.add_circle_outline, color: AppTheme.primaryGreen),
                         ),
                       ],
                     ),
@@ -195,17 +140,67 @@ class _NgoFoodRequirementsScreenState extends State<NgoFoodRequirementsScreen> {
                 ),
               );
             }),
-            const SizedBox(height: 24),
+            const SizedBox(height: AppTheme.space24),
 
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isSaving ? null : _saveRequirements,
-                child: _isSaving
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Text('Save Requirements'),
-              ),
+            // ── Section 2: Operating Schedule ───────────────────────────────
+            Text(
+              context.tr('role_ngo'),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
             ),
+            const SizedBox(height: AppTheme.space16),
+
+            ..._operatingHours.entries.map((entry) {
+              final day = entry.key;
+              final dayCap = '${day[0].toUpperCase()}${day.substring(1)}';
+              final sched = entry.value;
+              final isOpen = sched['status'] == 'open';
+
+              return Container(
+                margin: const EdgeInsets.only(bottom: AppTheme.space8),
+                padding: const EdgeInsets.symmetric(horizontal: AppTheme.space16, vertical: AppTheme.space8),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 100,
+                      child: Text(dayCap, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                    ),
+                    Expanded(
+                      child: Text(
+                        isOpen ? '${sched['open']} – ${sched['close']}' : 'Closed',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: isOpen ? AppTheme.primaryGreen : AppTheme.error,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    Switch(
+                      value: isOpen,
+                      activeThumbColor: AppTheme.primaryGreen,
+                      onChanged: (val) {
+                        setState(() {
+                          sched['status'] = val ? 'open' : 'closed';
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              );
+            }),
+            const SizedBox(height: AppTheme.space24),
+
+            PrimaryActionButton(
+              label: context.tr('confirm').toUpperCase(),
+              icon: Icons.check_circle_outline,
+              isLoading: _isSaving,
+              onPressed: _saveAll,
+            ),
+            const SizedBox(height: AppTheme.space16),
           ],
         ),
       ),

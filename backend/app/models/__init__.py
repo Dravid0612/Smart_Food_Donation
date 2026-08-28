@@ -5,7 +5,9 @@ from app.models.models import (
     DonationHistory,
     VolunteerAssignment,
     Notification,
-    Reward
+    Reward,
+    RescueFeedback,
+    RescueIssueReport
 )
 
 __all__ = [
@@ -15,5 +17,7 @@ __all__ = [
     "DonationHistory",
     "VolunteerAssignment",
     "Notification",
-    "Reward"
+    "Reward",
+    "RescueFeedback",
+    "RescueIssueReport"
 ]

@@ -16,6 +16,18 @@ class SecureStorageService {
     return await _storage.read(key: AppConstants.keyAuthToken);
   }
 
+  Future<void> saveRefreshToken(String refreshToken) async {
+    await _storage.write(key: AppConstants.keyRefreshToken, value: refreshToken);
+  }
+
+  Future<String?> getRefreshToken() async {
+    return await _storage.read(key: AppConstants.keyRefreshToken);
+  }
+
+  Future<void> deleteRefreshToken() async {
+    await _storage.delete(key: AppConstants.keyRefreshToken);
+  }
+
   Future<void> saveUserData(String userDataJson) async {
     await _storage.write(key: AppConstants.keyUserData, value: userDataJson);
   }

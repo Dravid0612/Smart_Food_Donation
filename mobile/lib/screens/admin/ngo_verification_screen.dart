@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/localization/app_locale.dart';
+import '../../core/theme/app_theme.dart';
 import '../../providers/admin_provider.dart';
 import '../../providers/ngo_provider.dart';
-import '../../widgets/custom_card.dart';
-import '../../widgets/loading_indicator.dart';
-import '../../widgets/empty_state.dart';
+import '../../widgets/loading_state_widget.dart';
+import '../../widgets/empty_state_widget.dart';
 
+/// Admin Screen for inspecting and gating NGO shelter verification applications.
 class NgoVerificationScreen extends StatefulWidget {
   const NgoVerificationScreen({super.key});
 
@@ -32,66 +34,119 @@ class _NgoVerificationScreenState extends State<NgoVerificationScreen> {
     final unverifiedNgos = allNgos.where((n) => !n.isVerified).toList();
 
     return Scaffold(
+      backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: const Text('NGO Verification Queue'),
+        title: Text(context.tr('verify_ngos')),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
       ),
       body: adminProv.isLoading
-          ? const LoadingIndicatorWidget(message: 'Loading pending NGO registrations...')
+          ? LoadingStateWidget(message: context.tr('processing'))
           : unverifiedNgos.isEmpty
               ? EmptyStateWidget(
-                  icon: Icons.verified_user,
-                  title: 'All NGOs Verified',
-                  message: 'There are no pending unverified NGO registrations.',
+                  icon: Icons.verified_user_outlined,
+                  title: context.tr('verified_partner'),
+                  description: context.tr('verified_partner'),
                 )
               : ListView.builder(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(AppTheme.space16),
                   itemCount: unverifiedNgos.length,
                   itemBuilder: (context, index) {
                     final ngo = unverifiedNgos[index];
-                    return CustomCard(
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: AppTheme.space12),
+                      padding: const EdgeInsets.all(AppTheme.space16),
+                      decoration: BoxDecoration(
+                        color: AppTheme.card,
+                        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                        border: Border.all(color: AppTheme.border),
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
-                              const CircleAvatar(
-                                backgroundColor: Color(0xFFFEF3C7),
-                                child: Icon(Icons.business, color: Colors.amber),
+                              Container(
+                                padding: const EdgeInsets.all(AppTheme.space12),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.warning.withValues(alpha: 0.12),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(Icons.business, color: AppTheme.warning, size: 24),
                               ),
-                              const SizedBox(width: 14),
+                              const SizedBox(width: AppTheme.space12),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(ngo.organizationName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                    Text('Capacity: ${ngo.capacity} meals • Contact: ${ngo.contactPhone ?? "N/A"}', style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+                                    Text(
+                                      ngo.organizationName,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppTheme.textPrimary),
+                                    ),
+                                    Text(
+                                      '${context.tr('capacity_kg')}: ${ngo.capacity}',
+                                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                    ),
                                   ],
                                 ),
                               ),
                             ],
                           ),
-                          const SizedBox(height: 8),
-                          if (ngo.description != null) Text(ngo.description!, style: const TextStyle(fontSize: 13, color: Color(0xFF475569))),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: AppTheme.space12),
+                          Row(
+                            children: [
+                              const Icon(Icons.location_on_outlined, size: 16, color: AppTheme.textSecondary),
+                              const SizedBox(width: 4),
+                              Expanded(
+                                child: Text(
+                                  ngo.address ?? context.tr('pickup_address'),
+                                  style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(color: AppTheme.border, height: AppTheme.space24),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
+                              OutlinedButton(
+                                onPressed: () {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(context.tr('reject'))),
+                                  );
+                                },
+                                style: OutlinedButton.styleFrom(
+                                  minimumSize: const Size(0, 38),
+                                  foregroundColor: AppTheme.error,
+                                  side: const BorderSide(color: AppTheme.error),
+                                ),
+                                child: Text(context.tr('reject')),
+                              ),
+                              const SizedBox(width: AppTheme.space12),
                               ElevatedButton.icon(
                                 onPressed: () async {
+                                  final messenger = ScaffoldMessenger.of(context);
+                                  final verifiedText = '✅ ${ngo.organizationName} ${context.tr('verified_partner')}!';
                                   final ok = await ngoProv.verifyNgo(ngo.id);
                                   if (ok && mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(content: Text('NGO "${ngo.organizationName}" successfully verified! 🎉'), backgroundColor: const Color(0xFF10B981)),
+                                    messenger.showSnackBar(
+                                      SnackBar(
+                                        content: Text(verifiedText),
+                                        backgroundColor: AppTheme.primaryGreen,
+                                      ),
                                     );
-                                    await adminProv.fetchAllNgos();
+                                    adminProv.fetchAllNgos();
                                   }
                                 },
-                                icon: const Icon(Icons.check_circle_outline),
-                                label: const Text('Verify Organization'),
+                                style: ElevatedButton.styleFrom(
+                                  minimumSize: const Size(0, 38),
+                                  backgroundColor: AppTheme.primaryGreen,
+                                  foregroundColor: Colors.white,
+                                ),
+                                icon: const Icon(Icons.check_circle_outline, size: 18),
+                                label: Text(context.tr('confirm')),
                               ),
                             ],
                           ),

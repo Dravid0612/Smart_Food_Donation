@@ -1,60 +1,40 @@
 import 'package:flutter/material.dart';
-import '../core/theme/app_theme.dart';
+import '../core/utils/food_rescue_status_helper.dart';
 
 class UrgencyChip extends StatelessWidget {
   final String urgency;
+  final int? remainingMinutes;
 
-  const UrgencyChip({super.key, required this.urgency});
-
-  Color _getUrgencyColor(String urgency) {
-    switch (urgency.toLowerCase()) {
-      case 'fresh':
-        return AppTheme.urgencyFresh;
-      case 'use soon':
-        return AppTheme.urgencyUseSoon;
-      case 'urgent':
-        return AppTheme.urgencyUrgent;
-      case 'expired':
-        return AppTheme.urgencyExpired;
-      default:
-        return AppTheme.urgencyFresh;
-    }
-  }
-
-  IconData _getUrgencyIcon(String urgency) {
-    switch (urgency.toLowerCase()) {
-      case 'fresh':
-        return Icons.eco;
-      case 'use soon':
-        return Icons.access_time;
-      case 'urgent':
-        return Icons.warning_amber_rounded;
-      case 'expired':
-        return Icons.error_outline;
-      default:
-        return Icons.eco;
-    }
-  }
+  const UrgencyChip({
+    super.key,
+    required this.urgency,
+    this.remainingMinutes,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final color = _getUrgencyColor(urgency);
+    final info = FoodRescueStatusHelper.getRescueUrgency(
+      context,
+      urgency,
+      remainingMinutes: remainingMinutes,
+    );
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: info.backgroundColor,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.3), width: 1),
+        border: Border.all(color: info.borderColor, width: 1),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(_getUrgencyIcon(urgency), size: 14, color: color),
+          Icon(info.icon, size: 14, color: info.color),
           const SizedBox(width: 4),
           Text(
-            urgency,
+            info.label,
             style: TextStyle(
-              color: color,
+              color: info.color,
               fontSize: 12,
               fontWeight: FontWeight.bold,
             ),

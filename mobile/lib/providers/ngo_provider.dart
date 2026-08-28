@@ -46,4 +46,29 @@ class NgoProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  Future<bool> updateOperatingHours(int ngoId, Map<String, dynamic> schedule) async {
+    try {
+      await _apiClient.dio.put('/ngos/$ngoId/operating-hours', data: {
+        'operating_hours': schedule,
+      });
+      await fetchNgos();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<bool> updateDemands(int ngoId, Map<String, dynamic> demands) async {
+    try {
+      await _apiClient.dio.put('/ngos/$ngoId/demands', data: {
+        'demand_requirements': demands,
+      });
+      await fetchNgos();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
 }
+
