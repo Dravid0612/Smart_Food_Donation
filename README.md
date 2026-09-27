@@ -1,10 +1,11 @@
 # Smart Food Rescue Platform
-> **AI-Powered, Real-Time Surplus Food Recovery & Logistics System**
+> **AI-Powered, Real-Time Surplus Food Recovery & Logistics Mobile Platform**
 
-[![Backend Tests](https://img.shields.io/badge/Backend%20Pytest-227%20Passed-success)](file:///backend/tests)
-[![Flutter Tests](https://img.shields.io/badge/Flutter%20Tests-93%20Passed-success)](file:///mobile/test)
-[![Static Analysis](https://img.shields.io/badge/Flutter%20Analyze-0%20Issues-brightgreen)](file:///mobile)
-[![Languages](https://img.shields.io/badge/Languages-English%20%7C%20Tamil%20%7C%20Hindi-blue)](file:///mobile/lib/core/localization)
+[![Backend Tests](https://img.shields.io/badge/Backend%20Pytest-345%20Passed-success)](backend/tests)
+[![Flutter Tests](https://img.shields.io/badge/Flutter%20Tests-116%20Passed-success)](mobile/test)
+[![Static Analysis](https://img.shields.io/badge/Flutter%20Analyze-0%20Issues-brightgreen)](mobile)
+[![Languages](https://img.shields.io/badge/Languages-English%20%7C%20Tamil%20%7C%20Hindi-blue)](mobile/lib/core/localization)
+[![Documentation](https://img.shields.io/badge/Docs-Complete-informational)](docs/README.md)
 
 ---
 
@@ -105,11 +106,11 @@ The Flutter client supports build-time environment targets via `--dart-define`:
 Run the full automated test matrix locally:
 
 ```bash
-# Backend Automated Tests (227 Tests)
+# Backend Automated Tests (345 Tests)
 cd backend
 python -m pytest tests/ -v
 
-# Mobile Unit & Widget Tests (93 Tests)
+# Mobile Unit & Widget Tests (116 Tests)
 cd ../mobile
 flutter test
 
