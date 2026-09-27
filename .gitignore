@@ -1,62 +1,141 @@
-# Environment
+# ─────────────────────────────────────────────────────────────────────────────
+# Root .gitignore — Smart Food Rescue Platform (FastAPI + Flutter Mobile)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 1. Environment & Secrets
 .env
 .env.*
+.env.local
+.env.production
+.env.staging
+!.env.example
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
 
-# VS Code
-.vscode/
-
-# JetBrains
-.idea/
-
-# macOS
-.DS_Store
-
-# Windows
-Thumbs.db
-
-# Logs
-*.log
-
-# Python cache
+# 2. Python & Virtual Environments
 __pycache__/
+**/__pycache__/
 *.py[cod]
-
-# Virtual Environment
+*.pyo
 .venv/
 venv/
+ENV/
+env/
+*.egg-info/
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# SQLite
+# 3. Python Testing, Linting & Type Checking
+.pytest_cache/
+**/.pytest_cache/
+.mypy_cache/
+**/.mypy_cache/
+.ruff_cache/
+**/.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 4. Database & Storage
 *.db
+*.sqlite
 *.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+dump.rdb
 
+# 5. Flutter & Dart Artifacts
 .dart_tool/
+**/.dart_tool/
 .packages
+**/.packages
+.pub-cache/
 .pub/
+**/.pub/
 build/
-
+**/build/
 .flutter-plugins
+**/.flutter-plugins
 .flutter-plugins-dependencies
+**/.flutter-plugins-dependencies
 
-# IDE
+# 6. Android Platform & Signing Secrets
+**/android/.gradle/
+**/android/local.properties
+**/android/key.properties
+**/android/app/build/
+**/android/.kotlin/
+**/android/captures/
+**/.externalNativeBuild/
+**/.cxx/
+*.keystore
+*.jks
+
+# 7. iOS & macOS Mobile Platforms
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/Flutter/Generated.xcconfig
+**/ios/Flutter/app.flx
+**/ios/Flutter/app.zip
+**/ios/Flutter/flutter_assets/
+**/ios/ServiceDefinitions.json
+**/ios/Runner/GeneratedPluginRegistrant.*
+**/macos/Pods/
+**/macos/Flutter/ephemeral/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# 8. Mobile App Distribution Binaries
+*.apk
+*.aab
+*.app
+*.so
+
+# 9. IDE & Editor Configurations
 .idea/
+**/.idea/
+*.iml
+*.ipr
+*.iws
 .vscode/
+**/.vscode/
+!*.code-workspace
 
-# Android
-android/.gradle/
-android/local.properties
+# 10. Operating System Clutter
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.stackdump
 
-# iOS
-ios/Pods/
-ios/.symlinks/
-
-# macOS
-macos/Pods/
-
-# Linux
-linux/flutter/ephemeral/
-
-# Windows
-windows/flutter/ephemeral/
-
-# Generated
-*.lock
+# 11. Scratch & Temporary Files
+scratch/
+**/scratch/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+*.log
+**/logs/
