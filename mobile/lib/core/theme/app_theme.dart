@@ -56,6 +56,11 @@ class AppTheme {
   static const Color urgencyCritical = Color(0xFFC4432B);
   static const Color urgencyExpired = Color(0xFF64748B);
 
+  // Authoritative Core Design System Tokens
+  static const Color trustTeal = Color(0xFF3E6E72);
+  static const Color urgentAmber = Color(0xFFED6C02);
+  static const Color criticalCrimson = Color(0xFFC4432B);
+
   // 8-Point Spacing System
   static const double space2 = 2.0;
   static const double space4 = 4.0;

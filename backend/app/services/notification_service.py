@@ -18,8 +18,9 @@ SECURITY:
 
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Dict, Set
 
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,49 @@ logger = logging.getLogger("smart_food_rescue.notifications")
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# In-Memory Real-Time SSE Broadcaster (Zero Redis/Celery/Kafka Required)
+# ─────────────────────────────────────────────────────────────────────────────
+_user_subscribers: Dict[int, Set[asyncio.Queue]] = {}
+
+
+def subscribe_user_stream(user_id: int) -> asyncio.Queue:
+    """Subscribes an active SSE connection to real-time events for the specified user."""
+    queue: asyncio.Queue = asyncio.Queue()
+    if user_id not in _user_subscribers:
+        _user_subscribers[user_id] = set()
+    _user_subscribers[user_id].add(queue)
+    return queue
+
+
+def unsubscribe_user_stream(user_id: int, queue: asyncio.Queue):
+    """Unsubscribes an SSE connection when the client disconnects."""
+    if user_id in _user_subscribers:
+        _user_subscribers[user_id].discard(queue)
+        if not _user_subscribers[user_id]:
+            del _user_subscribers[user_id]
+
+
+def broadcast_user_event(user_id: int, payload: dict):
+    """Pushes a live notification event payload to all active SSE queues for user_id."""
+    if user_id in _user_subscribers:
+        for q in list(_user_subscribers[user_id]):
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
+
+
+def broadcast_admin_event(payload: dict):
+    """Broadcasts a live event to all connected subscribers."""
+    for uid, queues in list(_user_subscribers.items()):
+        for q in list(queues):
+            try:
+                q.put_nowait(payload)
+            except Exception:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -169,6 +213,57 @@ _NOTIFICATION_CONTENT = {
         "ta": {"title": "⚡ மீட்பு மறுஒதுக்கீடு செய்யப்பட்டது", "message": "சாத்தியக்கூறு ஆபத்து காரணமாக மீட்பு தானாகவே மறுஒதுக்கீடு செய்யப்பட்டது."},
         "hi": {"title": "⚡ बचाव पुनर्गठित (जोखिम में)", "message": "समय सीमा बनाए रखने के लिए बचाव मार्ग को स्वचालित रूप से फिर से असाइन किया गया।"},
     },
+    # ─── Canonical Phase 9 Operational Events ────────────────────────────────
+    "NEW_RESCUE": {
+        "en": {"title": "New Food Rescue Listed", "message": "A new food rescue surplus has been posted."},
+        "ta": {"title": "புதிய உணவு மீட்பு பதிவு", "message": "புதிய உணவு மீட்பு உபரி பதிவு செய்யப்பட்டுள்ளது."},
+        "hi": {"title": "नया भोजन बचाव सूचीबद्ध", "message": "एक नया भोजन बचाव अधिशेष पोस्ट किया गया है।"},
+    },
+    "OFFER_RECEIVED": {
+        "en": {"title": "Rescue Offer Received ⚡", "message": "You have received a new food rescue dispatch offer. Respond before the countdown ends."},
+        "ta": {"title": "மீட்பு வாய்ப்பு வந்துள்ளது ⚡", "message": "உங்களுக்கு புதிய உணவு மீட்பு வாய்ப்பு வந்துள்ளது. காலக்கெடு முடிவதற்குள் பதிலளிக்கவும்."},
+        "hi": {"title": "बचाव प्रस्ताव प्राप्त हुआ ⚡", "message": "आपको एक नया खाद्य बचाव प्रस्ताव मिला है। उलटी गिनती समाप्त होने से पहले प्रतिक्रिया दें।"},
+    },
+    "OFFER_ACCEPTED": {
+        "en": {"title": "Rescue Offer Accepted ✓", "message": "A partner organization has accepted the food rescue offer."},
+        "ta": {"title": "மீட்பு வாய்ப்பு ஏற்கப்பட்டது ✓", "message": "பங்காளர் அமைப்பு உணவு மீட்பு வாய்ப்பை ஏற்றுக்கொண்டது."},
+        "hi": {"title": "बचाव प्रस्ताव स्वीकृत ✓", "message": "एक भागीदार संस्था ने खाद्य बचाव प्रस्ताव स्वीकार कर लिया है।"},
+    },
+    "WAVE_ESCALATED": {
+        "en": {"title": "Dispatch Wave Escalated 🚨", "message": "The rescue dispatch has escalated to the next wave for rapid recovery."},
+        "ta": {"title": "அழைப்பு அடுத்த நிலைக்கு முன்னேறியது 🚨", "message": "உணவு மீட்பு அடுத்த நிலைக்கு விரிவாக்கப்பட்டுள்ளது."},
+        "hi": {"title": "डिस्पैच वेव एस्केलेट हुई 🚨", "message": "त्वरित वसूली के लिए बचाव डिस्पैच अगली लहर में बढ़ गया है।"},
+    },
+    "VOLUNTEER_REMATCHED": {
+        "en": {"title": "Volunteer Rematched ⚡", "message": "A new volunteer courier has been rematched to maintain the rescue timeline."},
+        "ta": {"title": "தன்னார்வலர் மறுஒதுக்கீடு ⚡", "message": "உணவு உரிய நேரத்தில் சேகரிக்கப்படுவதை உறுதி செய்ய புதிய தன்னார்வலர் நியமிக்கப்பட்டுள்ளார்."},
+        "hi": {"title": "स्वयंसेवक पुनः नियुक्त ⚡", "message": "समय पर पिकअप सुनिश्चित करने के लिए एक नया स्वयंसेवक फिर से सौंपा गया है।"},
+    },
+    "VOLUNTEER_ARRIVING": {
+        "en": {"title": "Volunteer Arriving 📍", "message": "Your volunteer courier is within 250 meters of the pickup location."},
+        "ta": {"title": "தன்னார்வலர் வந்துவிட்டார் 📍", "message": "தன்னார்வலர் பிக்கப் இடத்திற்கு அருகில் (250 மீட்டருக்குள்) வந்துவிட்டார்."},
+        "hi": {"title": "स्वयंसेवक पहुंच रहा है 📍", "message": "आपका स्वयंसेवक पिकअप स्थान के 250 मीटर के भीतर है।"},
+    },
+    "OTP_VERIFIED": {
+        "en": {"title": "Pickup Code Verified ✅", "message": "Physical handover OTP has been cryptographically validated."},
+        "ta": {"title": "OTP சரிபார்க்கப்பட்டது ✅", "message": "நேரடி ஒப்படைப்பு OTP வெற்றிகரமாக சரிபார்க்கப்பட்டது."},
+        "hi": {"title": "OTP सत्यापित ✅", "message": "हैंडओवर OTP सफलतापूर्वक सत्यापित हो गया है।"},
+    },
+    "FOOD_RECEIVED": {
+        "en": {"title": "Food Received at NGO ✓", "message": "The food rescue intake has arrived and has been received by the NGO facility."},
+        "ta": {"title": "NGO-ல் உணவு பெறப்பட்டது ✓", "message": "உணவு NGO மையத்தை அடைந்து பெறப்பட்டது."},
+        "hi": {"title": "NGO में खाना प्राप्त हुआ ✓", "message": "खाद्य बचाव NGO सुविधा पर पहुंच गया है और प्राप्त हो गया है।"},
+    },
+    "RESCUE_EXPIRED": {
+        "en": {"title": "Rescue Window Expired ⚠️", "message": "The safe consumption window for this donation has ended and it is no longer available."},
+        "ta": {"title": "மீட்பு காலக்கெடு முடிந்தது ⚠️", "message": "இந்த உணவின் பாதுகாப்பான பயன்பாட்டு காலக்கெடு முடிந்துவிட்டது."},
+        "hi": {"title": "बचाव समय सीमा समाप्त ⚠️", "message": "इस दान के लिए सुरक्षित उपभोग का समय समाप्त हो गया है।"},
+    },
+    "ADMIN_INTERVENTION": {
+        "en": {"title": "Admin Intervention Recorded 🛡️", "message": "An administrative intervention was executed to resolve an operational impediment."},
+        "ta": {"title": "நிர்வாக தலையீடு பதிவு செய்யப்பட்டது 🛡️", "message": "செயல்பாட்டு தடையைத் தீர்க்க நிர்வாக நடவடிக்கை எடுக்கப்பட்டுள்ளது."},
+        "hi": {"title": "प्रशासनिक हस्तक्षेप दर्ज 🛡️", "message": "परिचालन बाधा को हल करने के लिए प्रशासनिक हस्तक्षेप किया गया।"},
+    },
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,10 +356,11 @@ def _send_fcm_push(notification: Notification, db: Session) -> bool:
 
 # Urgent events that bypass preference settings
 _ALWAYS_SEND_EVENTS = {
-    "VOLUNTEER_ARRIVED", "OTP_SMS_SENT", "OTP_SMS_DELIVERED", "OTP_SMS_FAILED",
-    "RESCUE_AT_RISK", "ADMIN_ESCALATION", "PICKUP_COMPLETED",
+    "VOLUNTEER_ARRIVED", "VOLUNTEER_ARRIVING", "OTP_SMS_SENT", "OTP_SMS_DELIVERED", "OTP_SMS_FAILED",
+    "RESCUE_AT_RISK", "ADMIN_ESCALATION", "ADMIN_INTERVENTION", "PICKUP_COMPLETED", "OTP_VERIFIED",
     "RESCUE_REMATCHED_DONOR", "RESCUE_REMATCHED_NGO", "TASK_REASSIGNED_OLD_VOLUNTEER",
-    "NEW_TASK_REMATCHED_NEW_VOLUNTEER", "RESCUE_AT_RISK_ADMIN",
+    "NEW_TASK_REMATCHED_NEW_VOLUNTEER", "RESCUE_AT_RISK_ADMIN", "VOLUNTEER_REMATCHED",
+    "WAVE_ESCALATED", "RESCUE_EXPIRED", "OFFER_RECEIVED", "OFFER_ACCEPTED",
 }
 
 def _should_send_notification(
@@ -279,14 +375,16 @@ def _should_send_notification(
 
     event_category_map = {
         "operational_notifications": {
-            "DONATION_CREATED", "AI_ANALYSIS_COMPLETE", "DONATION_ACCEPTED",
+            "DONATION_CREATED", "NEW_RESCUE", "AI_ANALYSIS_COMPLETE", "DONATION_ACCEPTED", "OFFER_ACCEPTED",
             "VOLUNTEER_ASSIGNED", "VOLUNTEER_ON_THE_WAY", "FOOD_IN_TRANSIT",
-            "DELIVERED_TO_NGO", "DISTRIBUTION_STARTED", "FALLBACK_STARTED",
+            "DELIVERED_TO_NGO", "FOOD_RECEIVED", "DISTRIBUTION_STARTED", "FALLBACK_STARTED",
             "NEW_TASK", "TASK_CANCELLED", "RESCUE_REMATCHED_DONOR", "RESCUE_REMATCHED_NGO",
             "TASK_REASSIGNED_OLD_VOLUNTEER", "NEW_TASK_REMATCHED_NEW_VOLUNTEER",
+            "VOLUNTEER_REMATCHED", "OFFER_RECEIVED",
         },
         "urgent_rescue_alerts": {
-            "RESCUE_AT_RISK", "ADMIN_ESCALATION", "RESCUE_UNLIKELY", "RESCUE_AT_RISK_ADMIN",
+            "RESCUE_AT_RISK", "ADMIN_ESCALATION", "ADMIN_INTERVENTION", "RESCUE_UNLIKELY",
+            "RESCUE_AT_RISK_ADMIN", "WAVE_ESCALATED", "RESCUE_EXPIRED",
         },
         "impact_updates": {
             "DISTRIBUTION_COMPLETED", "RESCUE_COMPLETED",
@@ -314,6 +412,7 @@ def create_event_notification(
     lang: str = "en",
     send_push: bool = True,
     extra_message: Optional[str] = None,
+    extra_title: Optional[str] = None,
 ) -> Optional[Notification]:
     """
     Creates an in-app notification for a lifecycle event with deduplication.
@@ -326,27 +425,27 @@ def create_event_notification(
         lang: Language code (en, ta, hi)
         send_push: Whether to attempt FCM push
         extra_message: Optional message override (e.g. for custom alerts)
+        extra_title: Optional title override (e.g. for dynamic urgency titles)
 
     Returns:
         Created Notification or None if deduplicated/preference-blocked.
     """
-    # Deduplication: same event for same donation within 60 seconds is suppressed
+    # Deduplication: same event for same user/donation within 60 seconds is suppressed
+    from datetime import timedelta
     dedup_key = f"{donation_id}:{event_type}" if donation_id else f"user:{user_id}:{event_type}"
-    if donation_id:
-        from datetime import timedelta
-        cutoff = _utcnow() - timedelta(seconds=60)
-        duplicate = (
-            db.query(Notification)
-            .filter(
-                Notification.user_id == user_id,
-                Notification.dedup_key == dedup_key,
-                Notification.created_at >= cutoff,
-            )
-            .first()
+    cutoff = _utcnow() - timedelta(seconds=60)
+    duplicate = (
+        db.query(Notification)
+        .filter(
+            Notification.user_id == user_id,
+            Notification.dedup_key == dedup_key,
+            Notification.created_at >= cutoff,
         )
-        if duplicate:
-            logger.debug(f"[Notification] Deduplicated event_type={event_type} user_id={user_id}")
-            return None
+        .first()
+    )
+    if duplicate:
+        logger.info(f"[Notification] Deduplicated event_type={event_type} user_id={user_id} dedup_key={dedup_key}")
+        return None
 
     # Preference check
     prefs = db.query(NotificationPreference).filter(
@@ -363,12 +462,19 @@ def create_event_notification(
         "message": extra_message or "",
     }
 
+    # Validate related_donation_id existence to prevent foreign key violations on PostgreSQL/SQLite
+    valid_donation_id = donation_id
+    if donation_id is not None:
+        exists = db.query(FoodDonation.id).filter(FoodDonation.id == donation_id).first()
+        if not exists:
+            valid_donation_id = None
+
     notification = Notification(
         user_id=user_id,
-        title=content["title"],
+        title=extra_title or content["title"],
         message=extra_message or content["message"],
         type=_event_to_type(event_type),
-        related_donation_id=donation_id,
+        related_donation_id=valid_donation_id,
         event_type=event_type,
         deep_link_data=_build_deep_link_data(event_type, donation_id),
         dedup_key=dedup_key,
@@ -379,6 +485,19 @@ def create_event_notification(
     db.commit()
     db.refresh(notification)
 
+    # Broadcast to active SSE listeners
+    broadcast_user_event(user_id, {
+        "id": notification.id,
+        "title": notification.title,
+        "message": notification.message,
+        "type": notification.type,
+        "event_type": notification.event_type,
+        "related_donation_id": notification.related_donation_id,
+        "created_at": notification.created_at.isoformat() if notification.created_at else None,
+        "deep_link_data": notification.deep_link_data,
+        "is_read": notification.is_read,
+    })
+
     # Attempt FCM push
     if send_push:
         _send_fcm_push(notification, db)
@@ -388,13 +507,13 @@ def create_event_notification(
 
 def _event_to_type(event_type: str) -> str:
     """Maps event type to notification type category."""
-    if "EMERGENCY" in event_type or "CRITICAL" in event_type or "ADMIN_ESCALATION" in event_type:
+    if "EMERGENCY" in event_type or "CRITICAL" in event_type or "ADMIN_ESCALATION" in event_type or "WAVE_ESCALATED" in event_type:
         return "emergency"
-    if "RESCUE_AT_RISK" in event_type or "OTP_SMS_FAILED" in event_type or "FALLBACK" in event_type:
+    if "RESCUE_AT_RISK" in event_type or "OTP_SMS_FAILED" in event_type or "FALLBACK" in event_type or "EXPIRED" in event_type or "INTERVENTION" in event_type:
         return "alert"
-    if "ASSIGNMENT" in event_type or "VOLUNTEER" in event_type or "PICKUP" in event_type:
+    if "ASSIGNMENT" in event_type or "VOLUNTEER" in event_type or "PICKUP" in event_type or "OTP" in event_type or "TASK" in event_type:
         return "assignment"
-    if "DONATION" in event_type or "NGO" in event_type or "DISTRIBUTION" in event_type:
+    if "DONATION" in event_type or "NGO" in event_type or "DISTRIBUTION" in event_type or "OFFER" in event_type or "RESCUE" in event_type or "FOOD" in event_type:
         return "donation"
     return "info"
 
@@ -425,6 +544,19 @@ def create_notification(
     db.add(notification)
     db.commit()
     db.refresh(notification)
+
+    # Broadcast to active SSE listeners
+    broadcast_user_event(user_id, {
+        "id": notification.id,
+        "title": notification.title,
+        "message": notification.message,
+        "type": notification.type,
+        "event_type": getattr(notification, "event_type", None),
+        "related_donation_id": notification.related_donation_id,
+        "created_at": notification.created_at.isoformat() if notification.created_at else None,
+        "is_read": notification.is_read,
+    })
+
     return notification
 
 

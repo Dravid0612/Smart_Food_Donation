@@ -15,6 +15,41 @@ from app.services.food_knowledge_rules import resolve_food_profile, FoodProfile
 
 FOOD_SAFETY_DISCLAIMER = "Image analysis cannot guarantee food safety. Visual assessment only. This is an advisory estimate and does not certify food safety."
 
+# ── Canonical Rescue Urgency Constants & Thresholds ──────────────────────────
+class RescueUrgencyLevel:
+    FRESH = "FRESH"
+    APPROACHING = "APPROACHING"
+    URGENT = "URGENT"
+    CRITICAL = "CRITICAL"
+    RESCUE_WINDOW_ENDED = "RESCUE_WINDOW_ENDED"
+
+# Authoritative Urgency Thresholds (in remaining minutes)
+THRESHOLD_FRESH_MINUTES = 180        # > 180m (> 3h): FRESH
+THRESHOLD_APPROACHING_MINUTES = 120  # 121m - 180m (2 - 3h): APPROACHING
+THRESHOLD_URGENT_MINUTES = 45        # 46m - 120m (45m - 2h): URGENT
+THRESHOLD_CRITICAL_MINUTES = 0       # 1m - 45m: CRITICAL; <= 0: RESCUE_WINDOW_ENDED
+
+def map_remaining_minutes_to_urgency(remaining_minutes: int) -> Tuple[str, float]:
+    """
+    Authoritative Urgency Level & Score mapping for Smart Food Rescue.
+    Returns: (urgency_level, urgency_score)
+    - <= 0: RESCUE_WINDOW_ENDED (1.0)
+    - 1 to 45: CRITICAL (0.95)
+    - 46 to 120: URGENT (0.75)
+    - 121 to 180: APPROACHING (0.45)
+    - > 180: FRESH (0.15)
+    """
+    if remaining_minutes <= THRESHOLD_CRITICAL_MINUTES:
+        return RescueUrgencyLevel.RESCUE_WINDOW_ENDED, 1.0
+    elif remaining_minutes <= THRESHOLD_URGENT_MINUTES:
+        return RescueUrgencyLevel.CRITICAL, 0.95
+    elif remaining_minutes <= THRESHOLD_APPROACHING_MINUTES:
+        return RescueUrgencyLevel.URGENT, 0.75
+    elif remaining_minutes <= THRESHOLD_FRESH_MINUTES:
+        return RescueUrgencyLevel.APPROACHING, 0.45
+    else:
+        return RescueUrgencyLevel.FRESH, 0.15
+
 def calculate_elapsed_prep_time(
     prepared_at: datetime,
     current_time: Optional[datetime] = None
@@ -162,11 +197,22 @@ def evaluate_food_rescue_window(
         reasons.append("Food had direct guest/customer handling")
 
     adjusted_total_hours = max(0.5, total_window_hours - handling_deduction_hours)
-    window_end = prepared_at + timedelta(hours=adjusted_total_hours)
+
+    # Handle future preparation timestamp gracefully
+    if prepared_at > now:
+        effective_prep = now
+        reasons.append(f"Preparation timestamp is in the future ({prepared_at.strftime('%d %b %I:%M %p')}); baseline calculated from current time.")
+    else:
+        effective_prep = prepared_at
+
+    window_end = effective_prep + timedelta(hours=adjusted_total_hours)
 
     # Remaining duration
     remaining_seconds = (window_end - now).total_seconds()
-    remaining_minutes = max(0, int(remaining_seconds / 60))
+    if remaining_seconds <= 0:
+        remaining_minutes = 0
+    else:
+        remaining_minutes = int(remaining_seconds / 60)
 
     # 5. Output 1: Visual Condition
     # Handle AI vision inputs or set deterministic defaults
@@ -186,7 +232,7 @@ def evaluate_food_rescue_window(
     # 6. Output 2: Estimated Remaining-Use / Rescue Window
     window_hours_left = remaining_minutes / 60.0
     if remaining_minutes <= 0:
-        window_display = "Window Elapsed"
+        window_display = "Rescue Window Ended"
     elif window_hours_left < 1.0:
         window_display = f"~{remaining_minutes} minutes"
     elif window_hours_left <= 2.0:
@@ -194,22 +240,8 @@ def evaluate_food_rescue_window(
     else:
         window_display = f"~{window_hours_left:.1f} hours ({remaining_minutes} min remaining)"
 
-    # 7. Output 3: Rescue Urgency Level
-    if remaining_minutes <= 0:
-        urgency_level = "CRITICAL"
-        urgency_score = 1.0
-    elif remaining_minutes <= 60:
-        urgency_level = "CRITICAL"
-        urgency_score = 0.95
-    elif remaining_minutes <= 120:
-        urgency_level = "URGENT"
-        urgency_score = 0.75
-    elif remaining_minutes <= 240:
-        urgency_level = "APPROACHING"
-        urgency_score = 0.45
-    else:
-        urgency_level = "FRESH"
-        urgency_score = 0.15
+    # 7. Output 3: Authoritative Rescue Urgency Level & Score
+    urgency_level, urgency_score = map_remaining_minutes_to_urgency(remaining_minutes)
 
     # AI confidence rating
     confidence = ai_confidence_in or 0.88
@@ -257,6 +289,20 @@ def calculate_rescue_feasibility(
     )
 
     remaining_buffer = remaining_window_minutes - (estimated_pickup_minutes + estimated_travel_minutes + ngo_intake_minutes)
+
+    if remaining_window_minutes <= 0:
+        return {
+            "feasibility_status": "RESCUE_UNLIKELY",
+            "feasibility_label": "Rescue Window Ended",
+            "is_feasible": False,
+            "estimated_pickup_minutes": estimated_pickup_minutes,
+            "estimated_travel_minutes": estimated_travel_minutes,
+            "ngo_intake_minutes": ngo_intake_minutes,
+            "safety_buffer_minutes": safety_buffer_minutes,
+            "total_required_minutes": total_required_minutes,
+            "remaining_buffer_minutes": 0,
+            "explanation": "Advisory rescue deadline reached. Food rescue window has ended."
+        }
 
     if remaining_window_minutes >= total_required_minutes:
         feasibility_status = "RESCUE_FEASIBLE"

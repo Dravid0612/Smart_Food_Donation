@@ -1,3 +1,4 @@
+import logging
 import secrets
 import hashlib
 import json
@@ -6,11 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 from app.db.session import get_db
 from app.models.models import (
     FoodDonation, DonationHistory, NGO, User, VolunteerAssignment, Notification,
     RecurringDonation, Rating, MatchOffer, FoodAnalysis, Dispute, KitchenProfile,
-    DonorCustomFoodProfile
+    DonorCustomFoodProfile, PickupOtpRecord
 )
 from app.schemas.schemas import (
     DonationCreate, DonationUpdate, DonationResponse, DonationDetailResponse,
@@ -23,26 +26,33 @@ from app.schemas.schemas import (
     KitchenProfileCreate, KitchenProfileResponse, RepeatDonationPrefillResponse,
     DonorCustomFoodProfileCreate, DonorCustomFoodProfileResponse, CustomFoodAggregatedAdminResponse,
     FoodSafetyCheckRequest, FoodSafetyCheckResponse, RescueTrackingResponse,
-    DynamicRematchRequest, DynamicRematchResponse
+    DynamicRematchRequest, DynamicRematchResponse, DonationAcceptRequest
 )
 from app.core.dependencies import get_current_user, require_role
 from app.services.urgency_service import calculate_urgency
 from app.services.food_knowledge_rules import calculate_rule_coverage, estimate_equivalent_meals
-from app.services.food_rescue_window_service import evaluate_food_rescue_window, calculate_rescue_feasibility
+from app.services.food_rescue_window_service import evaluate_food_rescue_window, calculate_rescue_feasibility, RescueUrgencyLevel
 from app.services.recommendation_service import (
     recommend_ngos, recommend_volunteers, global_batch_match_ngos, optimize_volunteer_routes,
     build_rescue_checklist
 )
 from app.services.escalation_service import escalate_donation
 from app.services.reward_service import add_reward_points
-from app.services.notification_service import create_notification
-from app.services.security_service import validate_donation_transition, log_audit_event
+from app.services.notification_service import create_notification, create_event_notification
+from app.services.security_service import validate_donation_transition, log_audit_event, log_rescue_operation
 from app.services.ai_vision_service import analyze_food_image_and_metadata
 from app.services.proactive_dispatch_service import ProactiveDispatchService, BackgroundUrgencyMonitor
 from app.services.food_safety_check_service import food_safety_check_service
 from app.services.live_tracking_service import live_tracking_service
 from app.services.rematching_service import rematching_service
 from app.services.route_service import route_service
+from app.services.otp_service import _hash_otp, verify_pickup_otp, _otp_verification_lock
+from app.services.state_machine_service import (
+    transition_donation_state,
+    transition_donation_status,
+    transition_assignment_status,
+    DonationStatus,
+)
 from app.core.config import settings
 
 router = APIRouter(prefix="/donations", tags=["Donations"])
@@ -258,22 +268,55 @@ def create_donation(
         except Exception:
             pass # Non-blocking personal library sync
 
+    # Persist authoritative PickupOtpRecord with salted/SHA-256 hash
+    otp_record = PickupOtpRecord(
+        donation_id=new_donation.id,
+        donor_id=current_user.id,
+        purpose="PICKUP_VERIFICATION_OTP",
+        otp_hash=_hash_otp(otp),
+        expires_at=new_donation.otp_expiry,
+        is_active=True,
+        delivery_status="QUEUED",
+    )
+    db.add(otp_record)
+    db.commit()
+
     log_status_change(db, new_donation.id, None, "pending", current_user.id, "Donation created with AI condition assessment")
+    log_rescue_operation(
+        db, action="created", donation_id=new_donation.id,
+        user_id=current_user.id, old_status=None, new_status="pending",
+        remarks="Donation created with AI condition assessment",
+        details=f"Donation #{new_donation.id} created: {new_donation.food_name} ({new_donation.quantity} {new_donation.quantity_unit})"
+    )
+    log_rescue_operation(
+        db, action="OTP generated", donation_id=new_donation.id,
+        user_id=current_user.id,
+        remarks="Initial pickup OTP generated for donation",
+        details=f"OTP generated for donation #{new_donation.id}"
+    )
     
     # Proactive Time-Critical Food Rescue Alert & Targeted NGO Dispatch
     dispatch_res = ProactiveDispatchService.dispatch_proactive_alerts(db, new_donation, reference_time=now)
     
+    # Emit canonical NEW_RESCUE notification for donor
+    create_event_notification(
+        db,
+        user_id=current_user.id,
+        event_type="NEW_RESCUE",
+        donation_id=new_donation.id,
+        extra_message=f"Your donation '{new_donation.food_name}' has been listed for active rescue."
+    )
+
     # If Fresh / normal operations, ensure nearby available NGOs receive baseline awareness notification
     if dispatch_res.get("status") == "NORMAL_OPERATIONS":
         ngos = db.query(NGO).filter(NGO.is_verified == True, NGO.is_available == True).all()
         for ngo in ngos:
-            create_notification(
+            create_event_notification(
                 db,
                 user_id=ngo.user_id,
-                title="New Food Donation Available",
-                message=f"New donation '{new_donation.food_name}' ({new_donation.quantity} {new_donation.quantity_unit}) posted nearby.",
-                type="donation",
-                related_donation_id=new_donation.id
+                event_type="NEW_RESCUE",
+                donation_id=new_donation.id,
+                extra_message=f"New rescue '{new_donation.food_name}' ({new_donation.quantity} {new_donation.quantity_unit}) posted nearby."
             )
         db.commit()
 
@@ -672,7 +715,7 @@ def trigger_donation_rematch(
     donation_id: int,
     rematch_in: Optional[DynamicRematchRequest] = None,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["admin", "volunteer", "ngo"]))
+    current_user: User = Depends(require_role(["admin", "volunteer", "ngo", "donor"]))
 ):
     """
     Triggers dynamic rematching for an active rescue.
@@ -741,6 +784,43 @@ def get_donation_rematch_status(
         "feasibility_status": donation.feasibility_status,
         "last_feasibility_check_at": donation.last_feasibility_check_at,
         "assignments_history": assignment_records
+    }
+
+@router.post("/{donation_id}/check-feasibility")
+def check_donation_feasibility(
+    donation_id: int,
+    auto_rematch: bool = Query(True, description="Whether to automatically execute rematch if unhealthy"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Evaluates active assignment logistics feasibility, telemetry freshness,
+    and operational health. Automatically triggers dynamic rematching if unhealthy.
+    """
+    donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).first()
+    if not donation:
+        raise HTTPException(status_code=404, detail="Donation not found.")
+
+    health_eval = rematching_service.verify_active_assignment_health(db, donation)
+    rematch_result = None
+
+    if auto_rematch and health_eval.get("requires_rematch"):
+        rematch_result = rematching_service.attempt_dynamic_rematch(
+            db=db,
+            donation=donation,
+            trigger=health_eval.get("trigger", "HEALTH_CHECK_FAILED"),
+            reason=health_eval.get("reason", "Automated feasibility/telemetry check triggered rematch")
+        )
+
+    return {
+        "donation_id": donation.id,
+        "healthy": health_eval.get("healthy", True),
+        "requires_rematch": health_eval.get("requires_rematch", False),
+        "trigger": health_eval.get("trigger", "NONE"),
+        "reason": health_eval.get("reason"),
+        "feasibility": health_eval.get("feasibility"),
+        "telemetry": health_eval.get("telemetry"),
+        "rematch_result": rematch_result
     }
 
 @router.get("/{donation_id}/rescue-window", response_model=FoodRescueWindowResponse)
@@ -840,44 +920,108 @@ def reject_donation(
     donation_id: int,
     reason: Optional[str] = Query("NGO capacity or demand mismatch", alias="reason"),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["ngo", "admin"]))
+    current_user: User = Depends(require_role(["ngo", "volunteer", "admin"]))
 ):
     """
-    Allows an NGO to reject a donation match.
-    Triggers automatic fallback candidate search to ensure food is not wasted.
+    Allows an NGO or volunteer to reject/pass a donation match.
+    Updates candidate MatchOffer with timing metrics and triggers automatic fallback or wave advancement.
     """
     donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).with_for_update().first()
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found.")
 
-    ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first() if current_user.role == "ngo" else None
-
-    # If this NGO was assigned, reset to pending and restore capacity
-    if ngo_profile and donation.assigned_ngo_id == ngo_profile.id:
-        donation.assigned_ngo_id = None
-        donation.status = "pending"
-        ngo_profile.current_capacity = min(ngo_profile.capacity, (ngo_profile.current_capacity or 0) + int(donation.quantity))
-        ngo_profile.trust_score = max(0.0, (ngo_profile.trust_score or 96.0) - 2.0)
-        log_status_change(db, donation.id, "accepted", "pending", current_user.id, f"Rejected by NGO '{ngo_profile.organization_name}': {reason}")
-
-    # Fallback Matching: Automatically alert next suitable NGO
-    other_recs = recommend_ngos(db, donation)
+    now = datetime.now(timezone.utc)
     candidate_notified = False
-    for rec in other_recs:
-        if ngo_profile and rec["ngo_id"] == ngo_profile.id:
-            continue
-        next_ngo = db.query(NGO).filter(NGO.id == rec["ngo_id"]).first()
-        if next_ngo:
-            create_notification(
-                db,
-                user_id=next_ngo.user_id,
-                title="Fallback Food Donation Available",
-                message=f"Opportunity available: '{donation.food_name}' ({donation.quantity} {donation.quantity_unit}) ready for pickup.",
-                type="donation",
-                related_donation_id=donation.id
+
+    if current_user.role == "ngo":
+        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+
+        # If this NGO was assigned, reset to pending and restore capacity
+        if ngo_profile and donation.assigned_ngo_id == ngo_profile.id:
+            donation.assigned_ngo_id = None
+            transition_donation_status(
+                db, donation, "pending",
+                changed_by_user_id=current_user.id,
+                caller_role=current_user.role,
+                remarks=f"Rejected by NGO '{ngo_profile.organization_name}': {reason}"
             )
+            ngo_profile.current_capacity = min(ngo_profile.capacity, (ngo_profile.current_capacity or 0) + int(donation.quantity))
+            ngo_profile.trust_score = max(0.0, (ngo_profile.trust_score or 96.0) - 2.0)
+
+        # Update candidate MatchOffer
+        user_offer = db.query(MatchOffer).filter(
+            MatchOffer.donation_id == donation.id,
+            MatchOffer.candidate_id == current_user.id,
+            MatchOffer.candidate_type == "ngo",
+            MatchOffer.status == "offered"
+        ).first()
+        if user_offer:
+            user_offer.status = "rejected"
+            user_offer.responded_at = now
+            if user_offer.offered_at:
+                offered_at = user_offer.offered_at
+                if offered_at.tzinfo is None:
+                    offered_at = offered_at.replace(tzinfo=timezone.utc)
+                user_offer.response_time_seconds = (now - offered_at).total_seconds()
+
+        # Check if all active offers in the current wave are responded
+        active_offers_count = db.query(MatchOffer).filter(
+            MatchOffer.donation_id == donation.id,
+            MatchOffer.status == "offered"
+        ).count()
+
+        if active_offers_count == 0 and donation.status == "pending":
+            # All Wave 1 candidate NGOs passed -> advance to Wave 2 volunteer search
+            ProactiveDispatchService.dispatch_proactive_alerts(db, donation, force_dispatch=True)
             candidate_notified = True
-            break
+        else:
+            # Fallback Matching: Alert next suitable NGO if any
+            other_recs = recommend_ngos(db, donation)
+            for rec in other_recs:
+                if ngo_profile and rec["ngo_id"] == ngo_profile.id:
+                    continue
+                next_ngo = db.query(NGO).filter(NGO.id == rec["ngo_id"]).first()
+                if next_ngo:
+                    create_notification(
+                        db,
+                        user_id=next_ngo.user_id,
+                        title="Fallback Food Donation Available",
+                        message=f"Opportunity available: '{donation.food_name}' ({donation.quantity} {donation.quantity_unit}) ready for pickup.",
+                        type="donation",
+                        related_donation_id=donation.id
+                    )
+                    candidate_notified = True
+                    break
+
+    elif current_user.role == "volunteer":
+        if donation.assigned_volunteer_id == current_user.id:
+            donation.assigned_volunteer_id = None
+            if donation.status == "volunteer_assigned":
+                transition_donation_status(
+                    db, donation, "accepted",
+                    changed_by_user_id=current_user.id,
+                    caller_role=current_user.role,
+                    remarks=f"Volunteer rejected assignment: {reason}"
+                )
+
+        vol_offer = db.query(MatchOffer).filter(
+            MatchOffer.donation_id == donation.id,
+            MatchOffer.candidate_id == current_user.id,
+            MatchOffer.candidate_type == "volunteer",
+            MatchOffer.status == "offered"
+        ).first()
+        if vol_offer:
+            vol_offer.status = "rejected"
+            vol_offer.responded_at = now
+            if vol_offer.offered_at:
+                offered_at = vol_offer.offered_at
+                if offered_at.tzinfo is None:
+                    offered_at = offered_at.replace(tzinfo=timezone.utc)
+                vol_offer.response_time_seconds = (now - offered_at).total_seconds()
+
+        # Trigger fallback volunteer dispatch
+        ProactiveDispatchService.dispatch_proactive_alerts(db, donation, force_dispatch=True)
+        candidate_notified = True
 
     db.commit()
     return {
@@ -979,12 +1123,45 @@ def regenerate_donation_otp(
     donation.otp_used_at = None
     _last_otp_regen_map[donation.id] = now_ts
 
+    # Deactivate any active PickupOtpRecord for this donation
+    existing_otps = (
+        db.query(PickupOtpRecord)
+        .filter(
+            PickupOtpRecord.donation_id == donation.id,
+            PickupOtpRecord.purpose == "PICKUP_VERIFICATION_OTP",
+            PickupOtpRecord.is_active == True,
+        )
+        .all()
+    )
+    for old_rec in existing_otps:
+        old_rec.is_active = False
+    if existing_otps:
+        db.flush()
+
+    new_otp_record = PickupOtpRecord(
+        donation_id=donation.id,
+        donor_id=donation.donor_id,
+        volunteer_id=donation.assigned_volunteer_id,
+        purpose="PICKUP_VERIFICATION_OTP",
+        otp_hash=_hash_otp(new_otp),
+        expires_at=donation.otp_expiry,
+        is_active=True,
+        delivery_status="QUEUED",
+    )
+    db.add(new_otp_record)
+
     db.commit()
     db.refresh(donation)
 
     log_audit_event(db, action="otp_regenerated", user_id=current_user.id,
                     resource_type="donation", resource_id=donation.id, status_code="success",
                     details=f"Donor {current_user.id} regenerated OTP for donation {donation.id}")
+    log_rescue_operation(
+        db, action="OTP generated", donation_id=donation.id,
+        user_id=current_user.id,
+        remarks="Pickup OTP regenerated by donor",
+        details=f"Donor #{current_user.id} regenerated OTP for donation #{donation.id}"
+    )
 
     return {
         "donation_id": donation.id,
@@ -997,120 +1174,95 @@ def regenerate_donation_otp(
 @router.post("/{donation_id}/accept", response_model=DonationResponse)
 def accept_donation(
     donation_id: int,
+    payload: Optional[DonationAcceptRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["ngo", "admin"]))
 ):
-    # ── NGO Verification Check ────────────────────────────────────────────────
-    # Being authenticated as NGO role is NOT sufficient — must be admin-verified
-    ngo_profile = None
-    if current_user.role == "ngo":
-        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).with_for_update().first()
-        if not ngo_profile:
-            raise HTTPException(status_code=403, detail="NGO profile not found.")
-        if not ngo_profile.is_verified:
-            raise HTTPException(
-                status_code=403,
-                detail="Your NGO account is not verified. Only verified NGOs can accept donations."
-            )
+    pickup_mode = payload.pickup_mode if payload and payload.pickup_mode else "volunteer_dispatch"
+    offer_id = payload.offer_id if payload else None
 
-    # ── Concurrency protection: row lock to prevent race conditions ───────────
-    # with_for_update() acquires a DB lock on this row during the transaction
-    donation = db.query(FoodDonation).filter(
-        FoodDonation.id == donation_id
-    ).with_for_update().first()
+    # Execute authoritative 9-step atomic acceptance with concurrency locking
+    ProactiveDispatchService.process_atomic_ngo_acceptance(
+        db=db,
+        donation_id=donation_id,
+        ngo_user_id=current_user.id,
+        pickup_mode=pickup_mode,
+        offer_id=offer_id,
+        caller_role=current_user.role,
+    )
 
+    donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).first()
+    resp = DonationResponse.model_validate(donation)
+    resp.urgency_level = calculate_urgency(donation.preparation_time, donation.expiry_time)
+    return resp
+
+@router.post("/{donation_id}/request-volunteer", response_model=DonationResponse)
+def request_volunteer_for_donation(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ngo", "admin"]))
+):
+    """
+    Switches an accepted donation from NGO Self-Pickup to Volunteer Courier Dispatch.
+    Allows NGO shelters without driver availability or encountering vehicle trouble
+    to request community volunteer support.
+    """
+    donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).with_for_update().first()
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found.")
 
-    # ── Idempotency + State Machine ───────────────────────────────────────────
-    if donation.status != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Donation has already been accepted or is no longer available (status: '{donation.status}')."
-        )
+    if current_user.role == "ngo":
+        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+        if not ngo_profile or donation.assigned_ngo_id != ngo_profile.id:
+            raise HTTPException(status_code=403, detail="Only the assigned receiving NGO can request volunteer support.")
 
-    # Enforce state machine transition
-    validate_donation_transition(donation.status, "accepted", current_user.role)
+    if donation.status not in ["accepted"]:
+        raise HTTPException(status_code=400, detail=f"Cannot request volunteer for donation in '{donation.status}' status.")
 
-    if ngo_profile is None and current_user.role == "admin":
-        # Admin accepting on behalf — find/create NGO context
-        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).with_for_update().first()
-        if not ngo_profile:
-            ngo_profile = db.query(NGO).filter(NGO.is_verified == True).with_for_update().first()
-            if not ngo_profile:
-                raise HTTPException(status_code=400, detail="No verified NGO profile found to accept on behalf of.")
-
-    # ── Capacity Safeguard: Strict capacity reservation ───────────────────────
-    if (ngo_profile.current_capacity or 0) < donation.quantity:
+    # ── Execution-Time ERW Re-evaluation ──────────────────────────────────────
+    now_eval = datetime.now(timezone.utc)
+    urgency_eval = ProactiveDispatchService.evaluate_donation_urgency(db, donation, reference_time=now_eval)
+    if (
+        urgency_eval.get("urgency_level") == RescueUrgencyLevel.RESCUE_WINDOW_ENDED
+        or (donation.remaining_minutes is not None and donation.remaining_minutes <= 0)
+        or donation.status == "expired"
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"NGO capacity ({ngo_profile.current_capacity} meals) insufficient for donation batch ({int(donation.quantity)} meals)."
+            detail="Advisory rescue window has ended. Volunteer courier support cannot be dispatched."
         )
 
-    ngo_profile.current_capacity -= int(donation.quantity)
-
-    old_status = donation.status
-    donation.status = "accepted"
-    donation.assigned_ngo_id = ngo_profile.id
-
-    now = datetime.now(timezone.utc)
-
-    # Update winning offer and record response time
-    winning_offer = db.query(MatchOffer).filter(
-        MatchOffer.donation_id == donation.id,
-        MatchOffer.candidate_id == current_user.id,
-        MatchOffer.candidate_type == "ngo"
-    ).first()
-    if winning_offer:
-        winning_offer.status = "accepted"
-        winning_offer.responded_at = now
-        if winning_offer.offered_at:
-            offered_at = winning_offer.offered_at
-            if offered_at.tzinfo is None:
-                offered_at = offered_at.replace(tzinfo=timezone.utc)
-            winning_offer.response_time_seconds = (now - offered_at).total_seconds()
-    else:
-        winning_offer = MatchOffer(
-            donation_id=donation.id,
-            candidate_id=current_user.id,
-            candidate_type="ngo",
-            score=100.0,
-            status="accepted",
-            wave_number=donation.current_alert_wave or 1,
-            offered_at=now,
-            responded_at=now,
-            response_time_seconds=0.0
-        )
-        db.add(winning_offer)
-
-    # Cancel all other outstanding offers for this donation
-    db.query(MatchOffer).filter(
-        MatchOffer.donation_id == donation.id,
-        MatchOffer.id != (winning_offer.id if winning_offer else 0),
-        MatchOffer.status == "offered"
-    ).update({"status": "cancelled", "responded_at": now})
-
-    log_status_change(db, donation.id, old_status, "accepted", current_user.id,
-                      f"Accepted by {ngo_profile.organization_name}")
+    old_mode = donation.pickup_mode
+    donation.pickup_mode = "volunteer_dispatch"
+    log_status_change(
+        db, donation.id, donation.status, donation.status, current_user.id,
+        f"NGO switched pickup mode from '{old_mode}' to volunteer courier dispatch."
+    )
 
     create_notification(
         db, user_id=donation.donor_id,
-        title="Donation Accepted",
-        message=f"Your donation '{donation.food_name}' has been accepted by {ngo_profile.organization_name}.",
-        type="success", related_donation_id=donation.id
+        title="Volunteer Support Requested",
+        message=f"Receiving shelter requested community volunteer courier support for '{donation.food_name}'.",
+        type="info", related_donation_id=donation.id
+    )
+
+    log_audit_event(
+        db, action="volunteer_requested_by_ngo",
+        user_id=current_user.id,
+        resource_type="donation",
+        resource_id=donation.id,
+        status_code="success",
+        details=f"Donation {donation.id} switched to volunteer dispatch."
     )
 
     db.commit()
     db.refresh(donation)
 
-    log_audit_event(
-        db, action="donation_accepted",
-        user_id=current_user.id,
-        resource_type="donation",
-        resource_id=donation.id,
-        status_code="success",
-        details=f"NGO '{ngo_profile.organization_name}' accepted donation {donation.id}"
-    )
+    # Proactively trigger Wave 2 alerts to feasible community volunteers
+    try:
+        ProactiveDispatchService.dispatch_proactive_alerts(db, donation, force_dispatch=True)
+    except Exception as e:
+        logger.warning(f"Proactive dispatch error on volunteer request: {e}")
 
     resp = DonationResponse.model_validate(donation)
     resp.urgency_level = calculate_urgency(donation.preparation_time, donation.expiry_time)
@@ -1134,8 +1286,6 @@ def cancel_donation(
     # State machine validation
     validate_donation_transition(donation.status, "cancelled", current_user.role)
 
-    old_status = donation.status
-    donation.status = "cancelled"
     donation.failure_reason = cancel_in.reason
 
     if donation.assigned_ngo_id:
@@ -1151,10 +1301,20 @@ def cancel_donation(
         VolunteerAssignment.status.in_(["assigned", "accepted"])
     ).all()
     for a in assignments:
-        a.status = "cancelled"
+        transition_assignment_status(
+            db, a, "cancelled",
+            changed_by_user_id=current_user.id,
+            caller_role=current_user.role,
+            remarks=f"Donation cancelled by donor: {cancel_in.reason}"
+        )
         a.failure_reason = f"Donation cancelled by donor: {cancel_in.reason}"
 
-    log_status_change(db, donation.id, old_status, "cancelled", current_user.id, f"Cancelled: {cancel_in.reason}")
+    transition_donation_status(
+        db, donation, "cancelled",
+        changed_by_user_id=current_user.id,
+        caller_role=current_user.role,
+        remarks=f"Cancelled: {cancel_in.reason}"
+    )
     db.commit()
     db.refresh(donation)
 
@@ -1195,40 +1355,51 @@ def trigger_emergency_escalation(
 def collect_food(
     donation_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["volunteer", "admin"]))
+    current_user: User = Depends(require_role(["volunteer", "ngo", "admin"]))
 ):
     donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).first()
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found.")
 
-    # Volunteer assignment ownership check
+    # Ownership check
     if current_user.role == "volunteer" and donation.assigned_volunteer_id != current_user.id:
         raise HTTPException(status_code=403, detail="You are not the assigned volunteer for this donation.")
+    elif current_user.role == "ngo":
+        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+        if not ngo_profile or donation.assigned_ngo_id != ngo_profile.id:
+            raise HTTPException(status_code=403, detail="You are not the assigned NGO for this donation.")
 
+    pickup_actor = f"NGO {current_user.name}" if current_user.role == "ngo" else "volunteer"
     # State machine enforcement
-    validate_donation_transition(donation.status, "collected", current_user.role)
-
-    old_status = donation.status
-    donation.status = "collected"
-    log_status_change(db, donation.id, old_status, "collected", current_user.id, "Food collected by volunteer")
+    transition_donation_status(
+        db, donation, "collected",
+        changed_by_user_id=current_user.id,
+        caller_role=current_user.role,
+        remarks=f"Food collected by {pickup_actor}"
+    )
 
     assignment = db.query(VolunteerAssignment).filter(
         VolunteerAssignment.donation_id == donation.id,
         VolunteerAssignment.volunteer_id == current_user.id
     ).first()
     if assignment:
-        assignment.collected_at = datetime.now(timezone.utc)
-        assignment.status = "collected"
+        transition_assignment_status(
+            db, assignment, "collected",
+            changed_by_user_id=current_user.id,
+            caller_role=current_user.role,
+            remarks="Food collected by volunteer"
+        )
 
-    create_notification(db, donation.donor_id, "Food Collected", f"Volunteer has picked up '{donation.food_name}'.", "info", donation.id)
-    if donation.assigned_ngo and donation.assigned_ngo.user_id:
+    create_notification(db, donation.donor_id, "Food Collected", f"{pickup_actor} has picked up '{donation.food_name}'.", "info", donation.id)
+    if current_user.role != "ngo" and donation.assigned_ngo and donation.assigned_ngo.user_id:
         create_notification(db, donation.assigned_ngo.user_id, "Delivery En Route", f"Volunteer is delivering '{donation.food_name}'.", "info", donation.id)
 
     db.commit()
     db.refresh(donation)
 
     log_audit_event(db, action="pickup_confirmed", user_id=current_user.id,
-                    resource_type="donation", resource_id=donation.id, status_code="success")
+                    resource_type="donation", resource_id=donation.id, status_code="success",
+                    details=f"Pickup confirmed by {pickup_actor}")
 
     resp = DonationResponse.model_validate(donation)
     resp.urgency_level = calculate_urgency(donation.preparation_time, donation.expiry_time)
@@ -1244,23 +1415,32 @@ def deliver_food(
     if not donation:
         raise HTTPException(status_code=404, detail="Donation not found.")
 
-    # Volunteer assignment ownership check
+    # Ownership check
     if current_user.role == "volunteer" and donation.assigned_volunteer_id != current_user.id:
         raise HTTPException(status_code=403, detail="You are not the assigned volunteer for this donation.")
+    elif current_user.role == "ngo":
+        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+        if not ngo_profile or donation.assigned_ngo_id != ngo_profile.id:
+            raise HTTPException(status_code=403, detail="You are not the assigned NGO for this donation.")
 
     # State machine enforcement — transition to 'delivered' (NGO records distribution to reach 'completed')
-    validate_donation_transition(donation.status, "delivered", current_user.role)
-
-    old_status = donation.status
-    donation.status = "delivered"
-    log_status_change(db, donation.id, old_status, "delivered", current_user.id, "Food delivered to NGO facility — awaiting beneficiary distribution recording")
+    transition_donation_status(
+        db, donation, "delivered",
+        changed_by_user_id=current_user.id,
+        caller_role=current_user.role,
+        remarks="Food delivered to NGO facility — awaiting beneficiary distribution recording"
+    )
 
     assignment = db.query(VolunteerAssignment).filter(
         VolunteerAssignment.donation_id == donation.id
     ).first()
     if assignment:
-        assignment.delivered_at = datetime.now(timezone.utc)
-        assignment.status = "delivered"
+        transition_assignment_status(
+            db, assignment, "delivered",
+            changed_by_user_id=current_user.id,
+            caller_role=current_user.role,
+            remarks="Food delivered to NGO facility"
+        )
 
     if donation.assigned_volunteer_id:
         vol = db.query(User).filter(User.id == donation.assigned_volunteer_id).first()
@@ -1287,21 +1467,23 @@ def deliver_food(
     points = 20 if donation.is_emergency else 10
     add_reward_points(db, donation.donor_id, points_to_add=points)
 
-    create_notification(
-        db, user_id=donation.donor_id,
-        title="Food Delivered to NGO! 🚀",
-        message=f"Your donation '{donation.food_name}' ({donation.quantity:.0f} meals) has been safely delivered to the NGO partner! Earned +{points} reward points.",
-        type="success", related_donation_id=donation.id
+    create_event_notification(
+        db,
+        user_id=donation.donor_id,
+        event_type="FOOD_RECEIVED",
+        donation_id=donation.id,
+        extra_message=f"Your donation '{donation.food_name}' ({donation.quantity:.0f} meals) has been safely delivered to the NGO partner! Earned +{points} reward points.",
     )
     # Notify the NGO to record beneficiary distribution
     if donation.assigned_ngo_id:
         ngo_notif = db.query(NGO).filter(NGO.id == donation.assigned_ngo_id).first()
         if ngo_notif and ngo_notif.user_id:
-            create_notification(
-                db, user_id=ngo_notif.user_id,
-                title="Record Beneficiary Distribution",
-                message=f"Food received: '{donation.food_name}' ({donation.quantity:.0f} meals). Please record beneficiary distribution to close this rescue.",
-                type="info", related_donation_id=donation.id
+            create_event_notification(
+                db,
+                user_id=ngo_notif.user_id,
+                event_type="FOOD_RECEIVED",
+                donation_id=donation.id,
+                extra_message=f"Food received: '{donation.food_name}' ({donation.quantity:.0f} meals). Please record beneficiary distribution to close this rescue.",
             )
 
     db.commit()
@@ -1865,7 +2047,6 @@ def record_beneficiary_distribution(
 
     remarks = dist_in.remarks or dist_in.beneficiary_notes
 
-    old_status = donation.status
     new_status = "completed" if remaining_qty <= 0 else "partially_distributed"
 
     donation.received_quantity = received_qty
@@ -1874,25 +2055,35 @@ def record_beneficiary_distribution(
     donation.distribution_timestamp = dist_in.distribution_timestamp or datetime.now(timezone.utc)
     donation.distribution_remarks = remarks
     donation.beneficiaries_served = beneficiaries
-    donation.status = new_status
 
-    log_status_change(
-        db, donation.id, old_status, new_status, current_user.id,
-        f"Distributed {distributed_qty:.0f} meals to {beneficiaries} beneficiaries (Remaining: {remaining_qty:.0f})"
+    transition_donation_status(
+        db, donation, new_status,
+        changed_by_user_id=current_user.id,
+        caller_role=current_user.role,
+        remarks=f"Distributed {distributed_qty:.0f} meals to {beneficiaries} beneficiaries (Remaining: {remaining_qty:.0f})"
     )
 
     if ngo_profile:
         ngo_profile.total_distributed_meals = (ngo_profile.total_distributed_meals or 0.0) + float(distributed_qty)
 
     # Notify donor that food was distributed to beneficiaries
-    create_notification(
-        db,
-        user_id=donation.donor_id,
-        title="Food Distributed to Beneficiaries! ❤️",
-        message=f"{distributed_qty:.0f} meals from your donation '{donation.food_name}' have been served to people in need.",
-        type="success",
-        related_donation_id=donation.id
-    )
+    if new_status == "completed":
+        create_event_notification(
+            db,
+            user_id=donation.donor_id,
+            event_type="DISTRIBUTION_COMPLETED",
+            donation_id=donation.id,
+            extra_message=f"All meals ({distributed_qty:.0f}) from your donation '{donation.food_name}' have been served to people in need.",
+        )
+    else:
+        create_notification(
+            db,
+            user_id=donation.donor_id,
+            title="Food Distributed to Beneficiaries! ❤️",
+            message=f"{distributed_qty:.0f} meals from your donation '{donation.food_name}' have been served to people in need.",
+            type="success",
+            related_donation_id=donation.id
+        )
 
     db.commit()
     db.refresh(donation)
@@ -1902,6 +2093,19 @@ def record_beneficiary_distribution(
         resource_type="donation", resource_id=donation.id, status_code="success",
         details=f"Distributed {distributed_qty} meals to {beneficiaries} beneficiaries."
     )
+    log_rescue_operation(
+        db, action="distributed", donation_id=donation.id,
+        user_id=current_user.id, old_status=donation.status, new_status=new_status,
+        remarks=f"Distributed {distributed_qty:.0f} meals to {beneficiaries} beneficiaries",
+        details=f"Distributed {distributed_qty} meals to {beneficiaries} beneficiaries (Remaining: {remaining_qty:.0f})"
+    )
+    if new_status == "completed":
+        log_rescue_operation(
+            db, action="completed", donation_id=donation.id,
+            user_id=current_user.id, old_status="partially_distributed", new_status="completed",
+            remarks="Rescue mission completed and food fully distributed",
+            details=f"Donation #{donation.id} completed. All meals distributed."
+        )
 
     return DonationDistributionResponse(
         donation_id=donation.id,
@@ -1941,13 +2145,22 @@ def process_timeouts(
     ).all()
 
     for va in timed_out_assignments:
-        va.status = "failed"
+        transition_assignment_status(
+            db, va, "failed",
+            changed_by_user_id=current_user.id,
+            caller_role="system",
+            remarks="Assignment timed out (no volunteer response)"
+        )
         va.failure_reason = "Assignment timed out (no volunteer response)"
         donation = db.query(FoodDonation).filter(FoodDonation.id == va.donation_id).first()
         if donation:
-            donation.status = "accepted"
+            transition_donation_status(
+                db, donation, "accepted",
+                changed_by_user_id=current_user.id,
+                caller_role="system",
+                remarks="Volunteer response timed out; reverted to accepted for fallback dispatch"
+            )
             donation.assigned_volunteer_id = None
-            log_status_change(db, donation.id, "volunteer_assigned", "accepted", current_user.id, "Volunteer response timed out; reverted to accepted for fallback dispatch")
             # Dispatch fallback volunteer
             recs = recommend_volunteers(db, donation)
             for r in recs:
@@ -2360,62 +2573,95 @@ def verify_pickup_otp_endpoint(
     donation_id: int,
     payload: PickupOtpVerifyRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_role(["volunteer", "admin"])),
+    current_user: User = Depends(require_role(["volunteer", "admin", "ngo"])),
 ):
     """
-    Volunteer enters the OTP shown by the donor to verify pickup.
+    Volunteer or self-pickup NGO enters the OTP shown by the donor to verify pickup.
     On success: donation transitions to 'collected'.
 
     SECURITY:
-    - Only volunteers and admins may call this.
+    - Only assigned volunteers, receiving NGOs, and admins may call this.
     - Donors cannot self-verify (role enforced at route level).
     - Wrong OTP → 400. Expired → 410. Replay → 409.
     """
-    donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).first()
-    if not donation:
-        raise HTTPException(status_code=404, detail="Donation not found.")
+    with _otp_verification_lock:
+        db.expire_all()
+        # 1. Row locking for transaction safety
+        try:
+            donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).with_for_update().first()
+        except Exception:
+            donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).first()
 
-    if current_user.role == "volunteer" and donation.assigned_volunteer_id != current_user.id:
-        raise HTTPException(status_code=403, detail="You are not assigned to this donation.")
+        if not donation:
+            raise HTTPException(status_code=404, detail="Donation not found.")
 
-    # Verify OTP — raises 400/409/410 on failure
-    verify_pickup_otp(db, donation, payload.otp, current_user)
+        # 2. Replay guard: already collected or OTP used
+        if donation.otp_used_at is not None or donation.status in ["collected", "in_transit", "delivered", "completed"]:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This pickup code has already been used. Pickup already verified."
+            )
 
-    # Transition to collected
-    old_status = donation.status
-    donation.status = "collected"
-    log_status_change(db, donation.id, old_status, "collected", current_user.id, "Pickup OTP verified by volunteer")
+        if current_user.role == "volunteer" and donation.assigned_volunteer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You are not assigned to this donation.")
+        elif current_user.role == "ngo":
+            ngo_prof = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+            if not ngo_prof or donation.assigned_ngo_id != ngo_prof.id:
+                raise HTTPException(status_code=403, detail="You are not the assigned NGO for this donation.")
 
-    # Update volunteer assignment
-    assignment = (
-        db.query(VolunteerAssignment)
-        .filter(
-            VolunteerAssignment.donation_id == donation_id,
-            VolunteerAssignment.volunteer_id == current_user.id,
+        # Verify OTP — raises 400/409/410 on failure
+        verify_pickup_otp(db, donation, payload.otp, current_user)
+
+        # Transition to collected
+        if donation.status != "collected":
+            transition_donation_status(
+                db, donation, "collected",
+                changed_by_user_id=current_user.id,
+                caller_role=current_user.role,
+                remarks="Pickup OTP verified"
+            )
+        donation.verification_otp = None  # Redact plaintext
+
+        # Update volunteer assignment
+        assignment = (
+            db.query(VolunteerAssignment)
+            .filter(
+                VolunteerAssignment.donation_id == donation_id,
+                VolunteerAssignment.volunteer_id == current_user.id,
+            )
+            .first()
         )
-        .first()
-    )
-    if assignment:
-        assignment.status = "collected"
-        assignment.collected_at = datetime.now(timezone.utc)
+        if assignment:
+            transition_assignment_status(
+                db, assignment, "collected",
+                changed_by_user_id=current_user.id,
+                caller_role=current_user.role,
+                remarks="Pickup confirmed via OTP"
+            )
 
-    db.commit()
+        db.commit()
 
-    # Fire PICKUP_COMPLETED notifications for all parties
-    donor = db.query(User).filter(User.id == donation.donor_id).first()
-    donor_lang = (donor.preferred_language if donor else "en") or "en"
-    create_event_notification(db, donation.donor_id, "PICKUP_COMPLETED", donation_id, donor_lang)
-    if donation.assigned_volunteer_id:
-        vol = db.query(User).filter(User.id == donation.assigned_volunteer_id).first()
-        vol_lang = (vol.preferred_language if vol else "en") or "en"
-        create_event_notification(db, donation.assigned_volunteer_id, "PICKUP_COMPLETED", donation_id, vol_lang)
+        # Fire PICKUP_COMPLETED notifications for all parties
+        donor = db.query(User).filter(User.id == donation.donor_id).first()
+        donor_lang = (donor.preferred_language if donor else "en") or "en"
+        create_event_notification(db, donation.donor_id, "PICKUP_COMPLETED", donation_id, donor_lang)
+        if donation.assigned_volunteer_id:
+            vol = db.query(User).filter(User.id == donation.assigned_volunteer_id).first()
+            vol_lang = (vol.preferred_language if vol else "en") or "en"
+            create_event_notification(db, donation.assigned_volunteer_id, "PICKUP_COMPLETED", donation_id, vol_lang)
 
-    log_audit_event(db, action="otp_verified_pickup_complete",
-                    user_id=current_user.id, resource_type="donation",
-                    resource_id=donation_id, status_code="success",
-                    details=f"Volunteer {current_user.name} verified pickup OTP for donation {donation_id}")
+        log_audit_event(db, action="otp_verified_pickup_complete",
+                        user_id=current_user.id, resource_type="donation",
+                        resource_id=donation_id, status_code="success",
+                        details=f"Volunteer {current_user.name} verified pickup OTP for donation {donation_id}")
+        log_rescue_operation(
+            db, action="collected", donation_id=donation.id,
+            user_id=current_user.id, old_status="arrived_at_donor", new_status="collected",
+            remarks="Pickup OTP verified",
+            details=f"User #{current_user.id} ({current_user.role}) verified pickup OTP for donation #{donation_id}"
+        )
 
-    return {"message": "Pickup code verified. Donation marked as collected.", "status": "collected"}
+        return {"message": "Pickup code verified. Donation marked as collected.", "status": "collected"}
 
 
 @router.post("/{donation_id}/pickup-otp/regenerate")

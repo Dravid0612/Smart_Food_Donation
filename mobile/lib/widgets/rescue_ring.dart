@@ -80,7 +80,7 @@ class RescueRing extends StatelessWidget {
 
   String _formatTime() {
     if (remainingMinutes <= 0) {
-      return '--';
+      return size >= 60 ? 'ENDED' : 'END';
     } else if (remainingMinutes < 60) {
       return '${remainingMinutes}m';
     } else {
@@ -114,7 +114,9 @@ class RescueRing extends StatelessWidget {
                 progress: isEnded ? 0.0 : progress,
                 strokeWidth: strokeWidth,
                 activeColor: ringColor,
-                trackColor: ringColor.withValues(alpha: 0.15),
+                trackColor: isEnded
+                    ? ringColor.withValues(alpha: 0.25)
+                    : ringColor.withValues(alpha: 0.15),
               ),
             ),
             if (showLabel)
@@ -125,7 +127,11 @@ class RescueRing extends StatelessWidget {
                     _formatTime(),
                     style: TextStyle(
                       fontFamily: 'NotoSans',
-                      fontSize: size >= 90 ? 20 : (size >= 60 ? 14 : 11),
+                      fontSize: size >= 90
+                          ? (isEnded ? 15 : 20)
+                          : (size >= 60
+                              ? (isEnded ? 11 : 14)
+                              : (isEnded ? 9 : 11)),
                       fontWeight: FontWeight.bold,
                       color: isEnded ? const Color(0xFFC4432B) : AppTheme.textPrimary,
                       height: 1.1,

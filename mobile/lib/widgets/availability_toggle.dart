@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../core/localization/app_locale.dart';
 import '../core/theme/app_theme.dart';
+import '../providers/volunteer_task_provider.dart';
 
 /// Persistent availability toggle for Volunteer AppBar: 🟢 Available, 🟡 Busy, ⚫ Offline
 class AvailabilityToggle extends StatelessWidget {
-  final String currentStatus; // 'available', 'busy', 'offline'
-  final ValueChanged<String> onStatusChanged;
+  final String? currentStatus; // 'available', 'busy', 'offline'
+  final ValueChanged<String>? onStatusChanged;
   final bool isLoading;
 
   const AvailabilityToggle({
     super.key,
-    required this.currentStatus,
-    required this.onStatusChanged,
+    this.currentStatus,
+    this.onStatusChanged,
     this.isLoading = false,
   });
 
@@ -41,11 +43,19 @@ class AvailabilityToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final norm = currentStatus.toLowerCase();
+    final taskProv = Provider.of<VolunteerTaskProvider>(context, listen: false);
+    final effectiveStatus = currentStatus ?? (taskProv.isAvailable ? 'available' : 'offline');
+    final norm = effectiveStatus.toLowerCase();
     final color = _getStatusColor(norm);
 
     return PopupMenuButton<String>(
-      onSelected: onStatusChanged,
+      onSelected: (val) {
+        if (onStatusChanged != null) {
+          onStatusChanged!(val);
+        } else {
+          taskProv.setAvailability(val == 'available');
+        }
+      },
       enabled: !isLoading,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppTheme.radiusCard),
@@ -103,6 +113,7 @@ class AvailabilityToggle extends StatelessWidget {
     return PopupMenuItem<String>(
       value: val,
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             width: 8,
@@ -110,7 +121,13 @@ class AvailabilityToggle extends StatelessWidget {
             decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           ),
           const SizedBox(width: AppTheme.space8),
-          Text(text, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          Flexible(
+            child: Text(
+              text,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );

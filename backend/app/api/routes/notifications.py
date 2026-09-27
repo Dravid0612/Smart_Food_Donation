@@ -1,4 +1,7 @@
+import asyncio
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -8,12 +11,22 @@ from app.db.session import get_db
 from app.models.models import Notification, User, NotificationPreference
 from app.schemas.schemas import NotificationResponse
 from app.core.dependencies import get_current_user
-from app.services.notification_service import mark_notification_opened
+from app.services.notification_service import (
+    mark_notification_opened,
+    subscribe_user_stream,
+    unsubscribe_user_stream,
+)
 
 router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
 
 # ─── Request / Response Schemas (inline for this route) ──────────────────────
+
+class NotificationFeedResponse(BaseModel):
+    notifications: List[NotificationResponse]
+    unread_count: int
+    server_time: str
+    has_more: bool
 
 class NotificationPreferenceUpdate(BaseModel):
     operational_notifications: Optional[bool] = None
@@ -64,6 +77,92 @@ def get_unread_count(
         Notification.is_read == False,
     ).count()
     return {"unread_count": count}
+
+
+@router.get("/feed", response_model=NotificationFeedResponse)
+def get_notification_feed(
+    since: Optional[str] = None,
+    unread_only: bool = False,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    High-efficiency delta polling endpoint for real-time mobile and web clients.
+    If 'since' is provided, returns only notifications created after that timestamp.
+    Also returns the current unread count and authoritative server_time for synchronizing next poll.
+    """
+    query = db.query(Notification).filter(Notification.user_id == current_user.id)
+    if since:
+        try:
+            # URL decoding often turns '+' into ' '; handle gracefully
+            clean_since = since.strip().replace(" ", "+")
+            since_dt = datetime.fromisoformat(clean_since)
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            query = query.filter(Notification.created_at > since_dt)
+        except Exception:
+            pass
+    if unread_only:
+        query = query.filter(Notification.is_read == False)
+
+    total_new = query.count()
+    items = query.order_by(Notification.created_at.desc()).limit(limit).all()
+
+    unread_count = db.query(Notification).filter(
+        Notification.user_id == current_user.id,
+        Notification.is_read == False,
+    ).count()
+
+    return NotificationFeedResponse(
+        notifications=items,
+        unread_count=unread_count,
+        server_time=datetime.now(timezone.utc).isoformat(),
+        has_more=total_new > limit,
+    )
+
+
+@router.get("/stream")
+async def stream_notifications(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Server-Sent Events (SSE) live streaming endpoint.
+    Establishes a persistent text/event-stream connection.
+    Pushes canonical lifecycle notifications immediately as they occur.
+    Transmits keepalive ': ping\n\n' every 15 seconds to prevent client timeout.
+    """
+    queue = subscribe_user_stream(current_user.id)
+
+    async def event_generator():
+        try:
+            connected_payload = json.dumps({
+                "type": "connected",
+                "user_id": current_user.id,
+                "server_time": datetime.now(timezone.utc).isoformat(),
+            })
+            yield f"event: connect\ndata: {connected_payload}\n\n"
+
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"event: notification\ndata: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            unsubscribe_user_stream(current_user.id, queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ─── Mark Read ────────────────────────────────────────────────────────────────

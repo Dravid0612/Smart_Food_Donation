@@ -504,7 +504,7 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
     switch (_volunteerSubStage) {
       case 0:
         return PrimaryActionButton(
-          label: context.tr('vol_action_start_pickup').toUpperCase(),
+          label: context.tr('action_go_to_pickup'),
           icon: Icons.directions_bike,
           isLoading: _isLoading,
           onPressed: () async {
@@ -526,7 +526,7 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
         );
       case 1:
         return PrimaryActionButton(
-          label: context.tr('stage_arrived_at_donor').toUpperCase(),
+          label: context.tr('action_arrived'),
           icon: Icons.location_on,
           backgroundColor: AppTheme.secondaryTerracotta,
           isLoading: _isLoading,
@@ -548,13 +548,13 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
         );
       case 2:
         return PrimaryActionButton(
-          label: context.tr('vol_action_verify_otp').toUpperCase(),
+          label: context.tr('action_verify_otp'),
           icon: Icons.pin_outlined,
           onPressed: () => _showOtpModal(context),
         );
       case 3:
         return PrimaryActionButton(
-          label: context.tr('vol_action_confirm_handover').toUpperCase(),
+          label: context.tr('action_deliver'),
           icon: Icons.task_alt,
           isLoading: _isLoading,
           onPressed: _confirmDelivery,

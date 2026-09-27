@@ -446,22 +446,38 @@ def recommend_volunteers(db: Session, donation: FoodDonation) -> list[dict]:
             )
 
         # STRICT FEASIBILITY HARD GATE:
-        # Infeasible candidates (capacity too small or pickup ETA exceeds window) are strictly penalized (0.1x)
-        # Guaranteeing FEASIBILITY > RELIABILITY
-        if not capacity_feasibility or not feasibility["is_feasible"]:
+        # Feasibility > Reliability rule: A courier having a high reliability score must NOT override rescue-window infeasibility.
+        # If total mission time exceeds the rescue window, the candidate is strictly REJECTED (score = 0.0).
+        if not feasibility["is_feasible"]:
+            raw_score = 0.0
+            final_score = 0.0
+            candidate_is_feasible = False
+            reason = (
+                f"REJECTED: Total mission time exceeds remaining rescue window ({remaining_window_min}m). "
+                f"Courier reliability ({reliability:.0f}%) cannot override rescue window infeasibility. "
+                f"Status: {feasibility['feasibility_label']}."
+            )
+        elif not capacity_feasibility:
             raw_score *= 0.1
-
-        # Admin Deprioritization
-        if vol.admin_action_status == "DEPRIORITIZED":
-            raw_score *= 0.7
-
-        final_score = raw_score
-
-        reason = (
-            f"{dist:.1f} km away (ETA: {int(pickup_eta_min)}m). Vehicle: {vol.vehicle_type or 'Bike'} (Cap: {vol_capacity} meals). "
-            f"Active tasks: {active_count}. Reliability: {reliability:.0f}%. "
-            f"Status: {feasibility['feasibility_label']}."
-        )
+            candidate_is_feasible = False
+            if vol.admin_action_status == "DEPRIORITIZED":
+                raw_score *= 0.7
+            final_score = raw_score
+            reason = (
+                f"Capacity insufficient: Vehicle capacity ({vol_capacity} meals) below batch ({donation.quantity} meals). "
+                f"Distance: {dist:.1f} km (ETA: {int(pickup_eta_min)}m). Reliability: {reliability:.0f}%."
+            )
+        else:
+            candidate_is_feasible = True
+            # Admin Deprioritization
+            if vol.admin_action_status == "DEPRIORITIZED":
+                raw_score *= 0.7
+            final_score = raw_score
+            reason = (
+                f"{dist:.1f} km away (ETA: {int(pickup_eta_min)}m). Vehicle: {vol.vehicle_type or 'Bike'} (Cap: {vol_capacity} meals). "
+                f"Active tasks: {active_count}. Reliability: {reliability:.0f}%. "
+                f"Status: {feasibility['feasibility_label']}."
+            )
 
         # Structured Explainable Match Reasons ("Why this volunteer?")
         match_reasons = []
@@ -471,6 +487,8 @@ def recommend_volunteers(db: Session, donation: FoodDonation) -> list[dict]:
             match_reasons.append({"code": "capacity", "label": f"Vehicle capacity sufficient ({vol_capacity} meals)", "is_positive": True})
         if feasibility["is_feasible"]:
             match_reasons.append({"code": "feasible", "label": f"Rescue feasible (ETA: {int(pickup_eta_min)}m, Window: {remaining_window_min}m)", "is_positive": True})
+        else:
+            match_reasons.append({"code": "infeasible", "label": f"REJECTED: Mission time exceeds window ({remaining_window_min}m)", "is_positive": False})
         match_reasons.append({"code": "distance", "label": f"{dist:.1f} km away (ETA: {int(pickup_eta_min)}m)", "is_positive": True})
         if reliability >= 90.0:
             match_reasons.append({"code": "reliability", "label": f"High completion history ({reliability:.0f}%)", "is_positive": True})
@@ -490,6 +508,7 @@ def recommend_volunteers(db: Session, donation: FoodDonation) -> list[dict]:
             "distance_km": round(dist, 2),
             "pickup_eta_minutes": int(pickup_eta_min),
             "feasibility_status": feasibility["feasibility_status"],
+            "is_feasible": candidate_is_feasible,
             "score": round(final_score * 100, 1),
             "score_breakdown": {
                 "distance": round(dist_score * 30, 1),

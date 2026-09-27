@@ -54,6 +54,7 @@ class UserResponse(BaseModel):
     reliability_score: Optional[float] = 95.0
     completed_deliveries: Optional[int] = 0
     failed_deliveries: Optional[int] = 0
+    preferred_language: Optional[str] = "en"
     is_active: bool
     created_at: datetime
 
@@ -262,6 +263,11 @@ class DonationUpdate(BaseModel):
     longitude: Optional[float] = None
     image_url: Optional[str] = None
 
+class DonationAcceptRequest(BaseModel):
+    pickup_mode: Optional[str] = "volunteer_dispatch" # volunteer_dispatch or self_pickup
+    offer_id: Optional[int] = None
+    remarks: Optional[str] = None
+
 class DonationHistoryResponse(BaseModel):
     id: int
     donation_id: int
@@ -348,6 +354,7 @@ class DonationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     urgency_level: Optional[str] = "Fresh" # Fresh, Use Soon, Urgent, Expired
+    pickup_mode: Optional[str] = "volunteer_dispatch"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -1197,6 +1204,7 @@ class AdminInterventionCreate(BaseModel):
     reason_code: str = Field(..., description="no_volunteer_available, ngo_unavailable, pickup_delayed, delivery_delayed, food_condition_concern, quantity_mismatch, transport_failure, other")
     notes: Optional[str] = Field(default=None, max_length=1000)
     action_type: Optional[str] = "INTERVENTION_RECORDED"
+    target_status: Optional[str] = Field(default=None, description="Optional target status for donation state transition")
 
 class AdminInterventionActionResponse(BaseModel):
     success: bool
@@ -1225,6 +1233,66 @@ class AdminCategoryBreakdownItem(BaseModel):
 class AdminCategoryBreakdownResponse(BaseModel):
     total_meals: float
     categories: List[AdminCategoryBreakdownItem]
+
+
+# ─── Frictionless First-Time Volunteer Claim Schemas ─────────────────────────
+
+class RescueClaimTokenResponse(BaseModel):
+    claim_token: str
+    claim_url: str
+    donation_id: int
+    expires_at: datetime
+    remaining_minutes: int
+    urgency_level: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RescueClaimPreviewResponse(BaseModel):
+    claim_token: str
+    donation_id: int
+    food_name: str
+    food_category: str
+    quantity: float
+    quantity_unit: str
+    pickup_neighborhood: str
+    approx_latitude: Optional[float] = None
+    approx_longitude: Optional[float] = None
+    remaining_minutes: int
+    urgency_level: str
+    is_feasible: bool
+    expires_at: datetime
+    status: str
+    dietary_type: Optional[str] = None
+
+
+class RescueClaimAcceptRequest(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    phone: str = Field(..., min_length=7, max_length=20)
+    vehicle_type: Optional[str] = "bike"
+    carrying_capacity: Optional[int] = 50
+    current_lat: Optional[float] = None
+    current_lon: Optional[float] = None
+
+
+class RescueClaimAcceptResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+    assignment_id: int
+    donation_id: int
+    status: str
+    pickup_address: str
+    current_eta_minutes: Optional[float] = None
+    remaining_minutes: int
+    urgency_level: str
+    message: str
+
+
+class VolunteerAccountUpgradeRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    preferred_language: Optional[str] = "en"
 
 
 

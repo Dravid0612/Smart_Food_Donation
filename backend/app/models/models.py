@@ -189,6 +189,7 @@ class FoodDonation(Base):
     current_alert_wave = Column(Integer, default=0)
     wave_timeout_at = Column(DateTime, nullable=True)
     alert_history_json = Column(Text, nullable=True)
+    pickup_mode = Column(String(50), default="volunteer_dispatch") # "volunteer_dispatch" or "self_pickup"
 
     # Real-Time Rescue Tracking
     tracking_latitude = Column(Float, nullable=True)
@@ -229,6 +230,7 @@ class FoodDonation(Base):
     issue_reports = relationship("RescueIssueReport", back_populates="donation", cascade="all, delete-orphan")
     food_analysis = relationship("FoodAnalysis", back_populates="donation", uselist=False, cascade="all, delete-orphan")
     disputes = relationship("Dispute", back_populates="donation", cascade="all, delete-orphan")
+    claim_tokens = relationship("RescueClaimToken", back_populates="donation", cascade="all, delete-orphan")
 
 class RecurringDonation(Base):
     __tablename__ = "recurring_donations"
@@ -647,3 +649,28 @@ class NotificationPreference(Base):
 
     # Relationships
     user = relationship("User", back_populates="notification_preference")
+
+
+class RescueClaimToken(Base):
+    """
+    Secure, single-use, time-scoped token for frictionless first-time volunteer claims.
+    Identifies only the specific rescue without exposing account access or private donor data.
+    """
+    __tablename__ = "rescue_claim_tokens"
+    __table_args__ = (
+        Index("ix_claim_token_active", "token", "is_active"),
+        Index("ix_claim_donation_active", "donation_id", "is_active"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    donation_id = Column(Integer, ForeignKey("food_donations.id", ondelete="CASCADE"), nullable=False, index=True)
+    token = Column(String(128), unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    claimed_at = Column(DateTime, nullable=True)
+    claimed_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    is_active = Column(Boolean, default=True)
+
+    # Relationships
+    donation = relationship("FoodDonation", back_populates="claim_tokens")
+    claimed_by = relationship("User", foreign_keys=[claimed_by_user_id])

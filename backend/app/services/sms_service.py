@@ -107,6 +107,44 @@ def mask_phone(phone: str) -> str:
             return f"{prefix} ****{last4}"
         return f"****{last4}"
     return "****"
+def verify_webhook_hmac_signature(payload: bytes, headers: dict, secret: Optional[str] = None) -> bool:
+    """
+    Validates webhook authenticity against either:
+    1. Cryptographic HMAC-SHA256 signature (e.g. X-Hub-Signature-256, X-SFR-Webhook-Signature).
+    2. Shared secret token header (X-SFR-Webhook-Secret) using constant-time comparison.
+    """
+    secret_key = secret or settings.SMS_WEBHOOK_SECRET
+    if not secret_key:
+        return False
+
+    # 1. HMAC-SHA256 signature verification
+    hmac_sig = (
+        headers.get("X-Hub-Signature-256")
+        or headers.get("x-hub-signature-256")
+        or headers.get("X-SFR-Webhook-Signature")
+        or headers.get("x-sfr-webhook-signature")
+        or headers.get("X-Fast2SMS-Signature-256")
+        or headers.get("x-fast2sms-signature-256")
+        or headers.get("X-Signature-SHA256")
+        or headers.get("x-signature-sha256")
+    )
+    if hmac_sig:
+        if hmac_sig.startswith("sha256="):
+            hmac_sig = hmac_sig[7:]
+        expected_sig = hmac.new(secret_key.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected_sig, hmac_sig)
+
+    # 2. Shared secret token header with timing-safe comparison
+    incoming_secret = (
+        headers.get("X-SFR-Webhook-Secret")
+        or headers.get("x-sfr-webhook-secret")
+        or headers.get("X-Fast2SMS-Signature")
+        or headers.get("x-fast2sms-signature")
+    )
+    if incoming_secret:
+        return hmac.compare_digest(incoming_secret, secret_key)
+
+    return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,11 +225,9 @@ class MockSmsProvider(SmsProvider):
             status="UNKNOWN",
             failure_reason="Delivery status polling not available with mock provider.",
         )
-
     def validate_webhook_signature(self, payload: bytes, headers: dict) -> bool:
-        # Mock: accept test webhook if header contains the configured secret
-        incoming = headers.get("X-SFR-Webhook-Secret", "")
-        return incoming == settings.SMS_WEBHOOK_SECRET
+        # Mock: validate using HMAC-SHA256 signature or configured shared secret
+        return verify_webhook_hmac_signature(payload, headers, settings.SMS_WEBHOOK_SECRET)
 
     def parse_delivery_webhook(self, payload: dict) -> WebhookDeliveryUpdate:
         return WebhookDeliveryUpdate(
@@ -380,8 +416,7 @@ class Fast2SmsProvider(SmsProvider):
         )
 
     def validate_webhook_signature(self, payload: bytes, headers: dict) -> bool:
-        incoming = headers.get("X-Fast2SMS-Signature", headers.get("X-SFR-Webhook-Secret", ""))
-        return incoming == settings.SMS_WEBHOOK_SECRET
+        return verify_webhook_hmac_signature(payload, headers, settings.SMS_WEBHOOK_SECRET)
 
     def parse_delivery_webhook(self, payload: dict) -> WebhookDeliveryUpdate:
         status_raw = payload.get("status", "UNKNOWN").upper()

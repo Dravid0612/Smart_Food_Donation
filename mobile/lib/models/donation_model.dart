@@ -409,6 +409,7 @@ class DonationModel {
   final String safetyCheckStatus;
   final String? safetyCheckVersion;
   final Map<String, dynamic>? safetyCheckAnswers;
+  final String pickupMode;
 
   DonationModel({
     required this.id,
@@ -488,6 +489,7 @@ class DonationModel {
     this.safetyCheckStatus = 'PASSED',
     this.safetyCheckVersion,
     this.safetyCheckAnswers,
+    this.pickupMode = 'volunteer_dispatch',
   });
 
   factory DonationModel.fromJson(Map<String, dynamic> json) {
@@ -561,6 +563,7 @@ class DonationModel {
       status: json['status'] ?? 'pending',
       assignedNgoId: json['assigned_ngo_id'],
       assignedVolunteerId: json['assigned_volunteer_id'],
+      pickupMode: json['pickup_mode'] ?? 'volunteer_dispatch',
       createdAt: json['created_at'] ?? '',
       urgencyLevel: json['urgency_level'] ?? 'Fresh',
       donorName: json['donor_name'],
@@ -587,6 +590,17 @@ class DonationModel {
       safetyCheckVersion: json['safety_check_version'],
       safetyCheckAnswers: json['safety_check_answers'] is Map<String, dynamic> ? json['safety_check_answers'] : null,
     );
+  }
+
+  String get pickupLocation => pickupAddress;
+
+  String get timeRemainingFormatted {
+    final mins = remainingMinutes ?? rescueWindow?.remainingMinutes ?? 0;
+    if (mins <= 0) return 'Ended';
+    if (mins < 60) return '$mins min remaining';
+    final hrs = mins ~/ 60;
+    final rMins = mins % 60;
+    return '${hrs}h ${rMins}m remaining';
   }
 }
 
@@ -627,6 +641,106 @@ class DonorCustomFoodProfileModel {
       defaultUnit: json['default_unit'] ?? 'Meals',
       usageCount: json['usage_count'] ?? 1,
       createdAt: json['created_at'] ?? '',
+    );
+  }
+}
+
+class RescueClaimPreviewModel {
+  final String claimToken;
+  final int donationId;
+  final String foodName;
+  final String foodCategory;
+  final double quantity;
+  final String quantityUnit;
+  final String pickupNeighborhood;
+  final double? approxLatitude;
+  final double? approxLongitude;
+  final int remainingMinutes;
+  final String urgencyLevel;
+  final bool isFeasible;
+  final String expiresAt;
+  final String status;
+  final String? dietaryType;
+
+  RescueClaimPreviewModel({
+    required this.claimToken,
+    required this.donationId,
+    required this.foodName,
+    required this.foodCategory,
+    required this.quantity,
+    required this.quantityUnit,
+    required this.pickupNeighborhood,
+    this.approxLatitude,
+    this.approxLongitude,
+    required this.remainingMinutes,
+    required this.urgencyLevel,
+    this.isFeasible = true,
+    required this.expiresAt,
+    required this.status,
+    this.dietaryType,
+  });
+
+  factory RescueClaimPreviewModel.fromJson(Map<String, dynamic> json) {
+    return RescueClaimPreviewModel(
+      claimToken: json['claim_token'] ?? '',
+      donationId: json['donation_id'] ?? 0,
+      foodName: json['food_name'] ?? 'Prepared Food',
+      foodCategory: json['food_category'] ?? 'Cooked Food',
+      quantity: (json['quantity'] as num?)?.toDouble() ?? 0.0,
+      quantityUnit: json['quantity_unit'] ?? 'Meals',
+      pickupNeighborhood: json['pickup_neighborhood'] ?? 'Nearby area',
+      approxLatitude: (json['approx_latitude'] as num?)?.toDouble(),
+      approxLongitude: (json['approx_longitude'] as num?)?.toDouble(),
+      remainingMinutes: json['remaining_minutes'] ?? 60,
+      urgencyLevel: json['urgency_level'] ?? 'URGENT',
+      isFeasible: json['is_feasible'] ?? true,
+      expiresAt: json['expires_at'] ?? '',
+      status: json['status'] ?? 'pending',
+      dietaryType: json['dietary_type'],
+    );
+  }
+}
+
+class RescueClaimAcceptResult {
+  final String accessToken;
+  final String tokenType;
+  final Map<String, dynamic> user;
+  final int assignmentId;
+  final int donationId;
+  final String status;
+  final String pickupAddress;
+  final double? currentEtaMinutes;
+  final int remainingMinutes;
+  final String urgencyLevel;
+  final String message;
+
+  RescueClaimAcceptResult({
+    required this.accessToken,
+    this.tokenType = 'bearer',
+    required this.user,
+    required this.assignmentId,
+    required this.donationId,
+    required this.status,
+    required this.pickupAddress,
+    this.currentEtaMinutes,
+    required this.remainingMinutes,
+    required this.urgencyLevel,
+    required this.message,
+  });
+
+  factory RescueClaimAcceptResult.fromJson(Map<String, dynamic> json) {
+    return RescueClaimAcceptResult(
+      accessToken: json['access_token'] ?? '',
+      tokenType: json['token_type'] ?? 'bearer',
+      user: json['user'] is Map ? Map<String, dynamic>.from(json['user']) : {},
+      assignmentId: json['assignment_id'] ?? 0,
+      donationId: json['donation_id'] ?? 0,
+      status: json['status'] ?? 'volunteer_assigned',
+      pickupAddress: json['pickup_address'] ?? '',
+      currentEtaMinutes: (json['current_eta_minutes'] as num?)?.toDouble(),
+      remainingMinutes: json['remaining_minutes'] ?? 0,
+      urgencyLevel: json['urgency_level'] ?? 'URGENT',
+      message: json['message'] ?? '',
     );
   }
 }

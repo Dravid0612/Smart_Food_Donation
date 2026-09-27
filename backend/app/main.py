@@ -1,13 +1,13 @@
 import time
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from app.core.config import settings
-from app.db.session import engine
+from app.db.session import engine, validate_database_connection, get_db_diagnostics
 from app.db.base import Base
 import app.models # Ensures all models are registered with Base metadata
 
@@ -39,6 +39,7 @@ def _ensure_sqlite_columns():
                 ("current_alert_wave", "INTEGER DEFAULT 0"),
                 ("wave_timeout_at", "DATETIME"),
                 ("alert_history_json", "TEXT"),
+                ("pickup_mode", "VARCHAR(50) DEFAULT 'volunteer_dispatch'"),
             ]
             for col_name, col_type in new_cols:
                 if col_name not in existing_cols:
@@ -100,7 +101,8 @@ def _ensure_sqlite_columns():
     except Exception as e:
         logger.warning(f"SQLite column verification skipped: {e}")
 
-_ensure_sqlite_columns()
+if engine.dialect.name == "sqlite":
+    _ensure_sqlite_columns()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -207,7 +209,12 @@ app.include_router(performance.router, prefix=settings.API_V1_STR)
 app.include_router(webhooks.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
-def start_proactive_urgency_monitor():
+def on_startup():
+    db_res = validate_database_connection()
+    logger.info(
+        f"[Startup] Database connection verified: dialect={db_res['dialect']} "
+        f"latency={db_res['latency_ms']}ms status={db_res['status']} url={db_res['database_url']}"
+    )
     from app.services.proactive_dispatch_service import BackgroundUrgencyMonitor
     BackgroundUrgencyMonitor.start(interval_seconds=60)
 
@@ -218,23 +225,54 @@ def stop_proactive_urgency_monitor():
 
 @app.get("/health")
 def health_check():
-    db_status = "ok"
-    try:
-        from sqlalchemy import text
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-    except Exception as e:
-        logger.error(f"Health check database query failed: {e}")
-        db_status = "unreachable"
+    db_val = validate_database_connection()
+    db_diag = get_db_diagnostics()
+    from app.services.proactive_dispatch_service import BackgroundUrgencyMonitor
+    monitor_running = getattr(BackgroundUrgencyMonitor, "_running", False)
 
-    status_code = status.HTTP_200_OK if db_status == "ok" else status.HTTP_503_SERVICE_UNAVAILABLE
+    is_ok = db_val["status"] == "ok"
+    status_code = status.HTTP_200_OK if is_ok else status.HTTP_503_SERVICE_UNAVAILABLE
+
     return JSONResponse(
         status_code=status_code,
         content={
-            "status": "ok" if db_status == "ok" else "degraded",
-            "database": db_status
+            "status": "ok" if is_ok else "degraded",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "database": {
+                "status": db_val["status"],
+                "dialect": db_val["dialect"],
+                "latency_ms": db_val["latency_ms"],
+                "database_url": db_val["database_url"],
+                "pool": db_diag.get("pool"),
+            },
+            "services": {
+                "background_urgency_monitor": "running" if monitor_running else "stopped",
+                "sms_provider": settings.SMS_PROVIDER,
+                "fcm_configured": bool(settings.FCM_SERVER_KEY),
+            },
+            "version": "1.0.0"
         }
     )
+
+@app.get("/health/live")
+def liveness_probe():
+    """K8s liveness probe: returns 200 if API process is running."""
+    return {"status": "alive", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/health/ready")
+def readiness_probe():
+    """K8s readiness probe: returns 200 only if database connection succeeds."""
+    db_val = validate_database_connection()
+    if db_val["status"] != "ok":
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "not_ready",
+                "reason": "database_unreachable",
+                "details": db_val.get("error", "Database check failed")
+            }
+        )
+    return {"status": "ready", "latency_ms": db_val["latency_ms"], "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/")
 def root():

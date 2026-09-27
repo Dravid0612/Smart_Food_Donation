@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, List
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from app.models.models import AuditLog, User, NGO, FoodDonation, VolunteerAssignment
+from app.models.models import AuditLog, User, NGO, FoodDonation, VolunteerAssignment, DonationHistory
 from app.core.config import settings
 
 # In-memory sliding-window failed attempts cache: {identifier: [timestamps]}
@@ -73,6 +73,57 @@ def log_audit_event(
         print(f"[SECURITY AUDIT LOG ERROR]: {e}")
         return None
 
+
+def log_rescue_operation(
+    db: Session,
+    action: str,
+    donation_id: int,
+    user_id: Optional[int] = None,
+    old_status: Optional[str] = None,
+    new_status: Optional[str] = None,
+    remarks: Optional[str] = None,
+    details: Optional[str] = None,
+    status_code: str = "success",
+) -> Optional[AuditLog]:
+    """
+    Authoritative rescue lifecycle audit and history logger.
+    - Records in AuditLog with action, user, and sanitized non-sensitive details.
+    - If old_status or new_status provided (or remarks), records in DonationHistory.
+    - Sanitizes details to ensure no passwords, bearer tokens, or plaintext OTPs are leaked.
+    """
+    safe_details = details or remarks or f"Action '{action}' executed"
+    # Redact sensitive values if accidentally passed
+    for sensitive_keyword in ["password", "bearer", "token", "otp_plain", "secret"]:
+        if sensitive_keyword in safe_details.lower():
+            safe_details = "[REDACTED_SECURITY_DATA]"
+
+    audit_entry = log_audit_event(
+        db=db,
+        action=action,
+        user_id=user_id,
+        resource_type="donation",
+        resource_id=donation_id,
+        status_code=status_code,
+        details=safe_details
+    )
+
+    if old_status is not None or new_status is not None or remarks:
+        try:
+            history_entry = DonationHistory(
+                donation_id=donation_id,
+                old_status=old_status,
+                new_status=new_status or (old_status or "active"),
+                changed_by=user_id,
+                remarks=remarks or safe_details,
+            )
+            db.add(history_entry)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"[DONATION HISTORY LOG ERROR]: {e}")
+
+    return audit_entry
+
 # Server-Side Valid State Transition Matrix
 # Mapping: current_status -> {target_status: [authorized_roles]}
 VALID_DONATION_TRANSITIONS = {
@@ -97,6 +148,7 @@ VALID_DONATION_TRANSITIONS = {
         "delivered": ["volunteer", "ngo", "admin"],
         "completed": ["volunteer", "ngo", "admin"],
         "pickup_failed": ["volunteer", "admin"],
+        "accepted": ["volunteer", "admin", "ngo"],
         "cancelled": ["donor", "admin"]
     },
     "pickup_en_route": {

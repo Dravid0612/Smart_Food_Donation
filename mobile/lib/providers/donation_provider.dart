@@ -286,11 +286,30 @@ class DonationProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> acceptDonation(int donationId) async {
+  Future<bool> acceptDonation(int donationId, {String pickupMode = 'volunteer_dispatch'}) async {
     _isLoading = true;
     notifyListeners();
     try {
-      await _apiClient.dio.post('/donations/$donationId/accept');
+      await _apiClient.dio.post('/donations/$donationId/accept', data: {
+        'pickup_mode': pickupMode,
+      });
+      await fetchDonations();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> requestVolunteer(int donationId) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await _apiClient.dio.post('/donations/$donationId/request-volunteer');
+      await fetchDonationDetail(donationId);
       await fetchDonations();
       _isLoading = false;
       notifyListeners();

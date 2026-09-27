@@ -3,9 +3,14 @@ import {
   HeartHandshake, ShieldCheck, Truck, BarChart3, Leaf, Plus, Sparkles, 
   MapPin, Clock, Award, CheckCircle2, ArrowRight, Zap, RefreshCw, AlertTriangle, 
   Layers, Droplets, Utensils, QrCode, Lock, AlertOctagon, Check, X, ShieldAlert,
-  Flame, Sliders, Calendar
+  Flame, Sliders, Calendar, Radio
 } from 'lucide-react';
 import { api } from './api';
+import OperationalStatusBar from './components/OperationalStatusBar';
+import RescueQueue from './components/RescueQueue';
+import LiveRescueFlowModal from './components/LiveRescueFlowModal';
+import WaveDispatchModal from './components/WaveDispatchModal';
+import AdminInterventionModal from './components/AdminInterventionModal';
 
 export default function App() {
   const [role, setRole] = useState('donor'); // donor, ngo, volunteer, admin
@@ -60,6 +65,18 @@ export default function App() {
   const [cancelDialogDonation, setCancelDialogDonation] = useState(null);
   const [cancelReason, setCancelReason] = useState('Donor unavailable');
 
+  // Admin Operational Control Center State
+  const [adminSummary, setAdminSummary] = useState(null);
+  const [adminInterventions, setAdminInterventions] = useState(null);
+  const [activeQueueTab, setActiveQueueTab] = useState('ALL');
+  const [receivingQueue, setReceivingQueue] = useState([]);
+  const [queueLoading, setQueueLoading] = useState(false);
+
+  // Operations Control Modals
+  const [selectedRescueFlowId, setSelectedRescueFlowId] = useState(null);
+  const [selectedWaveDonationId, setSelectedWaveDonationId] = useState(null);
+  const [selectedInterventionDonation, setSelectedInterventionDonation] = useState(null);
+
   useEffect(() => {
     autoLoginRole(role);
   }, [role]);
@@ -89,10 +106,18 @@ export default function App() {
       setDonations(dons);
 
       if (activeRole === 'admin') {
-        const s = await api.getStats().catch(() => null);
-        const h = await api.getHeatmap().catch(() => null);
+        const [s, h, summaryRes, queueRes, intervRes] = await Promise.all([
+          api.getStats().catch(() => null),
+          api.getHeatmap().catch(() => null),
+          api.getReceivingSummary().catch(() => null),
+          api.getReceivingQueue({ tab: activeQueueTab }).catch(() => ({ items: [] })),
+          api.getInterventions().catch(() => null),
+        ]);
         setStats(s);
         setHeatmap(h);
+        setAdminSummary(summaryRes);
+        setReceivingQueue(queueRes?.items || queueRes || []);
+        setAdminInterventions(intervRes);
       } else if (activeRole === 'volunteer') {
         const routes = await api.getBatchedRoutes().catch(() => []);
         setBatchedRoutes(routes);
@@ -101,6 +126,36 @@ export default function App() {
       console.error('Fetch data error:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleQueueTabChange = async (newTab) => {
+    setActiveQueueTab(newTab);
+    setQueueLoading(true);
+    try {
+      const res = await api.getReceivingQueue({ tab: newTab });
+      setReceivingQueue(res?.items || res || []);
+    } catch (err) {
+      console.error('Queue tab change error:', err);
+    } finally {
+      setQueueLoading(false);
+    }
+  };
+
+  const handleRefreshAdminOperations = async () => {
+    try {
+      const [summaryRes, queueRes, intervRes, dons] = await Promise.all([
+        api.getReceivingSummary().catch(() => null),
+        api.getReceivingQueue({ tab: activeQueueTab }).catch(() => ({ items: [] })),
+        api.getInterventions().catch(() => null),
+        api.getDonations().catch(() => []),
+      ]);
+      setAdminSummary(summaryRes);
+      setReceivingQueue(queueRes?.items || queueRes || []);
+      setAdminInterventions(intervRes);
+      setDonations(dons);
+    } catch (err) {
+      console.error('Admin refresh error:', err);
     }
   };
 
@@ -262,7 +317,7 @@ export default function App() {
             { key: 'donor', label: 'Donor & AI Vision', icon: HeartHandshake },
             { key: 'ngo', label: 'NGO & Demands', icon: ShieldCheck },
             { key: 'volunteer', label: 'Volunteer Logistics', icon: Truck },
-            { key: 'admin', label: 'Admin Intelligence', icon: BarChart3 },
+            { key: 'admin', label: 'Operations Control Center', icon: BarChart3 },
           ].map(tab => {
             const Icon = tab.icon;
             const active = role === tab.key;
@@ -498,6 +553,12 @@ export default function App() {
 
                     {/* Action Buttons */}
                     <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                      <button className="btn-secondary" onClick={() => setSelectedRescueFlowId(d.id)} style={{ fontSize: '11px', padding: '5px 10px', color: '#10b981' }}>
+                        Live Flow
+                      </button>
+                      <button className="btn-secondary" onClick={() => setSelectedWaveDonationId(d.id)} style={{ fontSize: '11px', padding: '5px 10px', color: '#38bdf8' }}>
+                        Wave Dispatch
+                      </button>
                       <button className="btn-secondary" onClick={() => handleViewCarbonImpact(d)} style={{ fontSize: '11px', padding: '5px 10px' }}>
                         <Leaf size={12} color="#10b981" /> Carbon
                       </button>
@@ -705,9 +766,29 @@ export default function App() {
           </div>
         )}
 
-        {/* ADMIN PORTAL */}
+        {/* ADMIN OPERATIONS CONTROL CENTER */}
         {role === 'admin' && (
           <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+            
+            {/* Operational Status Bar - 6 Key Operator Inquiries & Urgency Watchdog */}
+            <OperationalStatusBar 
+              summary={adminSummary}
+              interventions={adminInterventions}
+              onTabSelect={(tabKey) => handleQueueTabChange(tabKey)}
+              onRefresh={handleRefreshAdminOperations}
+            />
+
+            {/* Rescue Operations Queue with Visual Urgency Prioritization */}
+            <RescueQueue 
+              donations={receivingQueue.length > 0 ? receivingQueue : donations}
+              activeTab={activeQueueTab}
+              onTabChange={handleQueueTabChange}
+              onSelectFlow={(id) => setSelectedRescueFlowId(id)}
+              onSelectWave={(id) => setSelectedWaveDonationId(id)}
+              onSelectIntervene={(item) => setSelectedInterventionDonation(item)}
+            />
+
+            {/* Spatial Grid Heatmap & System Audit */}
             <div className="glass-panel" style={{ padding: '28px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
                 <Layers color="#38bdf8" size={24} />
@@ -717,7 +798,7 @@ export default function App() {
                 Renders spatial grid clusters across city coordinates with real-time audit logs of AI conditions and OTP handovers.
               </p>
 
-              {heatmap && (
+              {heatmap && heatmap.clusters && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '14px' }}>
                   {heatmap.clusters.map((cluster, idx) => (
                     <div key={idx} className="glass-panel" style={{ padding: '16px', borderRadius: '12px', background: 'rgba(15, 23, 42, 0.7)' }}>
@@ -833,6 +914,32 @@ export default function App() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* Live Rescue Flow Modal (8-Stage Operational Flow) */}
+      {selectedRescueFlowId && (
+        <LiveRescueFlowModal 
+          donationId={selectedRescueFlowId}
+          onClose={() => setSelectedRescueFlowId(null)}
+          onIntervene={(item) => setSelectedInterventionDonation(item)}
+        />
+      )}
+
+      {/* Wave Dispatch Proactive Modal (3-Wave Dispatch Process) */}
+      {selectedWaveDonationId && (
+        <WaveDispatchModal 
+          donationId={selectedWaveDonationId}
+          onClose={() => setSelectedWaveDonationId(null)}
+        />
+      )}
+
+      {/* Admin Authorized Intervention Modal */}
+      {selectedInterventionDonation && (
+        <AdminInterventionModal 
+          donation={selectedInterventionDonation}
+          onClose={() => setSelectedInterventionDonation(null)}
+          onSuccess={() => handleRefreshAdminOperations()}
+        />
       )}
     </div>
   );

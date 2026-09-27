@@ -1,0 +1,9 @@
+rescue_id,date,donor,ngo,volunteer,food_category,meals_count,posted_at,first_notification_at,accepted_at,pickup_completed_at,delivered_at,erw_minutes,time_to_first_notif_min,time_to_first_accept_min,platform_coord_time_min,platform_completion_time_min,manual_baseline_estimate_min,time_saved_min,manual_intervention,rematch_count,failure_reason,final_status
+RES-20260928-01,2026-09-28,Rasoi Heritage,Green Hope Care,Rahul Sharma,Cooked Meals,22,22:15,22:16,22:19,22:33,22:53,165,1,4,18,38,45,27,No,0,None,SUCCESS
+RES-20260929-02,2026-09-29,Annapoorna Grand,Green Hope Care,NGO Self-Pickup,Cooked Meals,30,22:05,22:06,22:10,22:24,22:42,175,1,5,19,37,40,21,No,0,None,SUCCESS
+RES-20260930-03,2026-09-30,Rasoi Heritage,Green Hope Care,Priya Nair (rematch),Cooked Meals,18,22:18,22:19,22:23,22:46,23:05,150,1,5,28,47,55,27,Yes,1,Rider vehicle breakdown at T+12m,MANUALLY RECOVERED
+RES-20261001-04,2026-10-01,Annapoorna Grand,Karunai Shelter,Priya Nair,Cooked Meals,25,22:08,22:09,22:13,22:27,22:47,180,1,5,19,39,45,26,No,0,None,SUCCESS
+RES-20261002-05,2026-10-02,Rasoi Heritage,Karunai Shelter,Rahul Sharma,Cooked Meals (Non-Veg),35,22:12,22:13,22:18,22:35,22:58,160,1,6,23,46,50,27,No,0,None,SUCCESS
+RES-20261003-06,2026-10-03,Rasoi Heritage,N/A,Rahul Sharma,Buffet Cooked Food,15,22:22,22:23,22:27,N/A,22:39,18,1,5,N/A,N/A,35,N/A,Yes,0,Excess ambient exposure (sour aroma detected),CANCELLED
+RES-20261004-07,2026-10-04,Annapoorna Grand,Green Hope Care,Priya Nair,Cooked Meals,20,15:45,15:46,15:51,16:12,16:32,170,1,6,27,47,35,8,Yes,0,Donor phone battery depleted at handover,MANUALLY RECOVERED
+RES-20261004-08,2026-10-04,Rasoi Heritage,Green Hope Care,Rahul Sharma,Cooked Meals,28,22:14,22:15,22:18,22:31,22:50,165,1,4,17,36,45,28,No,0,None,SUCCESS

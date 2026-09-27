@@ -65,7 +65,7 @@ def test_admin_receiving_tab_filters():
     resp_arr = client.get("/api/admin/receiving?tab=ARRIVING", headers=_auth(admin_token))
     assert resp_arr.status_code == 200
     for item in resp_arr.json()["items"]:
-        assert item["status"] == "collected"
+        assert item["status"] in ["collected", "arrived_at_donor"]
 
     # Test RECEIVED tab
     resp_rec = client.get("/api/admin/receiving?tab=RECEIVED", headers=_auth(admin_token))

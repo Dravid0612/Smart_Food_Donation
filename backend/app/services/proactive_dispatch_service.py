@@ -20,17 +20,24 @@ from app.models.models import (
     DonationHistory,
     RescueIssueReport,
     AuditLog,
+    VolunteerAssignment,
 )
 from app.services.food_rescue_window_service import (
     evaluate_food_rescue_window,
     calculate_rescue_feasibility,
 )
-from app.services.notification_service import create_notification
+from app.services.notification_service import create_notification, create_event_notification
 from app.services.recommendation_service import (
     haversine_distance,
     is_ngo_open_now,
     calculate_demand_match_score,
 )
+from app.services.state_machine_service import (
+    transition_donation_state,
+    transition_donation_status,
+    DonationStatus,
+)
+from app.services.security_service import log_audit_event, log_rescue_operation
 
 logger = logging.getLogger("smart_food_rescue.proactive_dispatch")
 
@@ -90,12 +97,16 @@ def format_proactive_alert_message(
     distance_km: Optional[float] = None,
     area_name: str = "nearby area",
     remaining_minutes: int = 0,
+    food_category: Optional[str] = None,
+    pickup_address: Optional[str] = None,
+    safety_advisory: Optional[str] = None,
 ) -> Tuple[str, str]:
     """
     Generates natural, non-machine-like trilingual alerts for Donor, NGO, Volunteer, and Admin.
     """
     lang = (language or "en").lower()
-    qty_str = f"{int(quantity) if quantity.is_integer() else quantity:.1f} {quantity_unit}"
+    formatted_qty = int(quantity) if (hasattr(quantity, "is_integer") and quantity.is_integer()) or int(quantity) == quantity else f"{quantity:.1f}"
+    qty_str = f"{formatted_qty} {quantity_unit}"
     dist_str = f"~{distance_km:.1f} km away in {area_name}" if distance_km is not None else area_name
 
     if role == "donor":
@@ -161,35 +172,38 @@ def format_proactive_alert_message(
             )
 
     elif role == "ngo":
+        cat_str = f" [{food_category}]" if food_category else ""
+        loc_str = pickup_address if pickup_address else dist_str
+        adv_str = f" • Safety Advisory: {safety_advisory}" if safety_advisory else ""
         if urgency == "CRITICAL":
             if lang == "ta":
                 return (
                     "🚨 மிக அவசர உணவு மீட்பு — உடனடி கவனம் தேவை",
-                    f"{qty_str} '{food_name}' மீட்பு காலக்கெடுவின் முடிவை நெருங்குகிறது ({dist_str}, ~{remaining_minutes} நிமிடம் மீதம்). உடனடியாக ஏற்க பரிந்துரைக்கப்படுகிறது."
+                    f"{qty_str} '{food_name}'{cat_str} மீட்பு காலக்கெடுவின் முடிவை நெருங்குகிறது ({loc_str}, ~{remaining_minutes} நிமிடம் மீதம்){adv_str}. உடனடியாக ஏற்க பரிந்துரைக்கப்படுகிறது."
                 )
             elif lang == "hi":
                 return (
                     "🚨 अति गंभीर बचाव — तत्काल ध्यान आवश्यक",
-                    f"{qty_str} '{food_name}' अपने अनुमानित बचाव समय के अंत के करीब है ({dist_str}, ~{remaining_minutes} मिनट शेष)। त्वरित स्वीकृति अनुशंसित है।"
+                    f"{qty_str} '{food_name}'{cat_str} अपने अनुमानित बचाव समय के अंत के करीब है ({loc_str}, ~{remaining_minutes} मिनट शेष){adv_str}। त्वरित स्वीकृति अनुशंसित है।"
                 )
             return (
                 "🚨 Critical Rescue — Immediate Attention",
-                f"{qty_str} of {food_name} are approaching the end of their estimated rescue window ({dist_str}, ~{remaining_minutes}m remaining). A feasible pickup/receipt is needed urgently."
+                f"{qty_str} of {food_name}{cat_str} are approaching the end of their estimated rescue window ({loc_str}, ~{remaining_minutes}m remaining){adv_str}. A feasible pickup/receipt is needed urgently."
             )
-        else: # URGENT
+        else: # URGENT / APPROACHING / FRESH
             if lang == "ta":
                 return (
                     "அவசர உணவு மீட்பு வாய்ப்பு",
-                    f"{qty_str} '{food_name}' அவசர மீட்பு நிலையை எட்டியுள்ளது ({dist_str}). உங்கள் அமைப்பு இந்த உணவை ஏற்க சாத்தியமாக உள்ளது."
+                    f"{qty_str} '{food_name}'{cat_str} மீட்பு நிலையை எட்டியுள்ளது ({loc_str}, ~{remaining_minutes} நிமிடம் மீதம்){adv_str}. உங்கள் அமைப்பு இந்த உணவை ஏற்க சாத்தியமாக உள்ளது."
                 )
             elif lang == "hi":
                 return (
-                    "नजदीक में तत्काल भोजन बचाव",
-                    f"{qty_str} '{food_name}' समय-संवेदनशील हो रहा है ({dist_str})। आपका संगठन इसे प्राप्त करने के लिए उपयुक्त है।"
+                    "நजदीक में तत्काल भोजन बचाव",
+                    f"{qty_str} '{food_name}'{cat_str} समय-संवेदनशील हो रहा है ({loc_str}, ~{remaining_minutes} मिनट शेष){adv_str}। आपका संगठन इसे प्राप्त करने के लिए उपयुक्त है।"
                 )
             return (
                 "Urgent Food Rescue Nearby",
-                f"{qty_str} of {food_name} are becoming time-critical ({dist_str}, ~{remaining_minutes}m remaining). Your organization is eligible to receive this donation."
+                f"{qty_str} of {food_name}{cat_str} available for rescue ({loc_str}, ~{remaining_minutes}m remaining){adv_str}. Your organization is eligible to receive this donation."
             )
 
     elif role == "volunteer":
@@ -296,6 +310,17 @@ class ProactiveDispatchService:
 
         remaining_minutes = assessment["remaining_minutes"]
 
+        # If food rules calculation reached 0 but donation has an active remaining_minutes with future expiry
+        if remaining_minutes <= 0 and donation.remaining_minutes and donation.remaining_minutes > 0:
+            exp_t = donation.expiry_time
+            if exp_t:
+                if exp_t.tzinfo is None:
+                    exp_t = exp_t.replace(tzinfo=timezone.utc)
+                if exp_t > now:
+                    remaining_minutes = donation.remaining_minutes
+            else:
+                remaining_minutes = donation.remaining_minutes
+
         # Authoritative Urgency Mapping
         if remaining_minutes <= THRESHOLD_CRITICAL_MINUTES:
             urgency_level = "RESCUE_WINDOW_ENDED"
@@ -327,15 +352,12 @@ class ProactiveDispatchService:
 
         # If window ended and status is still pending, update status appropriately
         if urgency_level == "RESCUE_WINDOW_ENDED" and donation.status == "pending":
-            donation.status = "expired"
-            history = DonationHistory(
-                donation_id=donation.id,
-                old_status="pending",
-                new_status="expired",
-                changed_by=None,
+            transition_donation_status(
+                db, donation, "expired",
+                changed_by_user_id=None,
+                caller_role="system",
                 remarks="RESCUE WINDOW ENDED: Advisory rescue deadline reached."
             )
-            db.add(history)
 
         db.commit()
         db.refresh(donation)
@@ -403,13 +425,17 @@ class ProactiveDispatchService:
             )
 
             # 5. Logistical Feasibility Engine (Feasibility > Proximity)
-            # Transit time estimate: 15 min pickup preparation + distance * 3.0 min/km + 10 min intake
-            transit_time_min = max(8.0, dist * 3.0)
+            # Transit time estimate: pickup preparation + distance * 3.0 min/km + intake
+            # In Wave 3 / CRITICAL emergency situations, rapid response shelters expedite handling (5m prep / 5m intake)
+            is_crit = (getattr(donation, "is_emergency", False) or getattr(donation, "rescue_urgency_level", None) == "CRITICAL")
+            pickup_prep = 5.0 if is_crit else 15.0
+            intake_time = 5.0 if is_crit else 10.0
+            transit_time_min = max(6.0, dist * 3.0)
             feasibility = calculate_rescue_feasibility(
                 remaining_window_minutes=remaining_minutes,
-                estimated_pickup_minutes=15.0,
+                estimated_pickup_minutes=pickup_prep,
                 estimated_travel_minutes=transit_time_min,
-                ngo_intake_minutes=10.0,
+                ngo_intake_minutes=intake_time,
             )
 
             # HARD GATE: If rescue is strictly unlikely/infeasible, EXCLUDE this NGO from priority alerts
@@ -450,6 +476,114 @@ class ProactiveDispatchService:
         return candidates
 
     @classmethod
+    def find_and_rank_feasible_volunteers(
+        cls,
+        db: Session,
+        donation: FoodDonation,
+        reference_time: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Finds eligible community volunteers applying strict HARD GATES:
+        1. Role == volunteer & is_active == True.
+        2. Admin action status != RESTRICTED.
+        3. Workload Hard Gate: active assignments count < 3.
+        4. Carrying Capacity Hard Gate: vol.carrying_capacity >= donation.quantity (Capacity-feasible).
+        5. Location Hard Gate: Distance <= 25.0 km (Location-feasible).
+        6. Time & Logistics Feasibility: Pickup ETA + Travel + Intake < Remaining ERW (Time-feasible).
+        
+        Ranks candidates using multi-factor scoring (NEVER distance alone):
+        Feasibility safety buffer (35%) + Distance (25%) + Reliability (25%) + Response speed (15%).
+        """
+        now = reference_time or _utcnow()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+
+        remaining_minutes = donation.remaining_minutes or 120
+
+        volunteers = db.query(User).filter(
+            User.role == "volunteer",
+            User.is_active == True,
+        ).all()
+
+        candidates = []
+
+        for vol in volunteers:
+            # 1. Admin restriction check
+            if getattr(vol, "admin_action_status", None) == "RESTRICTED":
+                continue
+
+            # 2. Workload Hard Gate: active tasks < 3
+            active_count = db.query(VolunteerAssignment).filter(
+                VolunteerAssignment.volunteer_id == vol.id,
+                VolunteerAssignment.status.in_(["assigned", "accepted", "collected", "en_route", "arrived", "in_transit"])
+            ).count()
+            if active_count >= 3:
+                continue
+
+            # 3. Carrying Capacity Hard Gate
+            vol_cap = vol.carrying_capacity or 50
+            if vol_cap < donation.quantity:
+                continue
+
+            # 4. Location Hard Gate: Distance <= 25.0 km
+            dist = haversine_distance(
+                donation.latitude, donation.longitude, vol.latitude, vol.longitude
+            )
+            if dist > 25.0:
+                continue
+
+            # 5. Time & Logistics Feasibility Hard Gate (Feasibility > Proximity)
+            is_crit = (getattr(donation, "is_emergency", False) or getattr(donation, "rescue_urgency_level", None) == "CRITICAL")
+            pickup_eta_min = max(4.0, dist * 2.5)
+            travel_min = 10.0 if is_crit else 20.0
+            intake_min = 5.0 if is_crit else 10.0
+            feasibility = calculate_rescue_feasibility(
+                remaining_window_minutes=remaining_minutes,
+                estimated_pickup_minutes=pickup_eta_min,
+                estimated_travel_minutes=travel_min,
+                ngo_intake_minutes=intake_min,
+            )
+
+            if not feasibility["is_feasible"] or remaining_minutes <= 0:
+                continue
+
+            # 6. Multi-Factor Scoring (Never distance alone)
+            buffer_min = feasibility.get("remaining_buffer_minutes", 0)
+            buffer_score = max(0.0, min(1.0, buffer_min / 60.0))
+            dist_score = max(0.0, 1.0 - (dist / 20.0))
+            reliability_score = (vol.reliability_score or 95.0) / 100.0
+            resp_sec = vol.avg_response_time_seconds or 180.0
+            response_speed = max(0.2, min(1.0, 1.0 - (resp_sec / 600.0)))
+
+            composite_score = (
+                (buffer_score * 0.35) +
+                (dist_score * 0.25) +
+                (reliability_score * 0.25) +
+                (response_speed * 0.15)
+            )
+
+            candidates.append({
+                "volunteer_id": vol.id,
+                "user_id": vol.id,
+                "name": vol.name,
+                "phone": vol.phone,
+                "vehicle_type": vol.vehicle_type or "bike",
+                "carrying_capacity": vol_cap,
+                "distance_km": round(dist, 2),
+                "pickup_eta_minutes": int(pickup_eta_min),
+                "buffer_minutes": int(buffer_min),
+                "feasibility_status": feasibility["feasibility_status"],
+                "feasibility_label": feasibility["feasibility_label"],
+                "reliability_score": vol.reliability_score or 95.0,
+                "active_tasks": active_count,
+                "score": round(composite_score * 100, 1),
+            })
+
+        # Rank by composite score (highest first)
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return candidates
+
+    @classmethod
     def dispatch_proactive_alerts(
         cls,
         db: Session,
@@ -458,23 +592,46 @@ class ProactiveDispatchService:
         force_dispatch: bool = False,
     ) -> Dict[str, Any]:
         """
-        Evaluates urgency and performs targeted multi-wave alerting with deduplication and cooldown.
+        Three-Wave Proactive Dispatch Engine:
+        - Wave 1 (NGO Self-Pickup): Approaching urgency, nearest verified NGOs, short cooldown.
+        - Wave 2 (Volunteer Support): Expands search to feasible community volunteer couriers.
+        - Wave 3 (Critical Emergency): Simultaneous broadcast to emergency shelters, on-call volunteers, and Admin escalation.
+        
+        Strict Rules:
+        - Every wave checks donation state and recalculates live ERW.
+        - Avoids duplicate active offers.
+        - Respects cooldown.
+        - Records wave_number, offer score, and timing.
+        - Stops immediately if donation is already accepted for self-pickup.
         """
         now = reference_time or _utcnow()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        # 1. Evaluate urgency
+        # 1. Live ERW Re-evaluation at Execution Time
         eval_result = cls.evaluate_donation_urgency(db, donation, reference_time=now)
         urgency = eval_result["urgency_level"]
         remaining_minutes = eval_result["remaining_minutes"]
 
-        if urgency == "RESCUE_WINDOW_ENDED":
+        if urgency == "RESCUE_WINDOW_ENDED" or remaining_minutes <= 0 or donation.status == "expired":
             # Cancel outstanding offers
             db.query(MatchOffer).filter(
                 MatchOffer.donation_id == donation.id,
                 MatchOffer.status == "offered"
-            ).update({"status": "cancelled"})
+            ).update({"status": "cancelled", "responded_at": now})
+            if donation.status == "pending":
+                transition_donation_status(
+                    db, donation, "expired",
+                    changed_by_user_id=None,
+                    caller_role="system",
+                    remarks="RESCUE WINDOW ENDED: Advisory deadline reached. Dispatch halted."
+                )
+                create_event_notification(
+                    db=db,
+                    user_id=donation.donor_id,
+                    event_type="RESCUE_EXPIRED",
+                    donation_id=donation.id,
+                )
             db.commit()
             return {
                 "status": "WINDOW_ENDED",
@@ -482,6 +639,7 @@ class ProactiveDispatchService:
                 "donation_id": donation.id,
             }
 
+        # 2. Donation State Checks
         if donation.status not in ["pending", "accepted"]:
             return {
                 "status": "SKIPPED",
@@ -489,7 +647,21 @@ class ProactiveDispatchService:
                 "donation_id": donation.id,
             }
 
-        # 2. Check Deduplication & Cooldown
+        if donation.status == "accepted":
+            if donation.pickup_mode == "self_pickup":
+                return {
+                    "status": "SKIPPED",
+                    "reason": "Donation accepted for NGO self-pickup. Courier dispatch unnecessary.",
+                    "donation_id": donation.id,
+                }
+            if donation.assigned_volunteer_id is not None:
+                return {
+                    "status": "SKIPPED",
+                    "reason": "Volunteer courier already assigned.",
+                    "donation_id": donation.id,
+                }
+
+        # 3. Check Deduplication & Cooldown
         last_urgency = donation.last_alerted_urgency
         last_alerted_at = donation.last_alerted_at
         if last_alerted_at and last_alerted_at.tzinfo is None:
@@ -512,7 +684,7 @@ class ProactiveDispatchService:
                 "donation_id": donation.id,
             }
 
-        # 3. If FRESH or normal operations, no mass alert required
+        # 4. If FRESH or normal operations, no urgent wave dispatch required
         if urgency == "FRESH":
             donation.last_alerted_urgency = "FRESH"
             donation.last_alerted_at = now
@@ -523,66 +695,100 @@ class ProactiveDispatchService:
                 "donation_id": donation.id,
             }
 
-        # 4. Find ranked feasible NGOs
-        ranked_ngos = cls.find_and_rank_feasible_ngos(db, donation, reference_time=now)
-
-        if not ranked_ngos:
-            # No feasible NGO found -> If CRITICAL or URGENT, escalate to Admin!
-            if urgency in ["URGENT", "CRITICAL"]:
-                cls._escalate_to_admin(
-                    db,
-                    donation,
-                    reason=f"No feasible NGOs available for {urgency} rescue ({remaining_minutes}m remaining).",
-                    remaining_minutes=remaining_minutes,
-                )
-            return {
-                "status": "NO_FEASIBLE_NGOS",
-                "urgency": urgency,
-                "donation_id": donation.id,
-                "reason": "No NGOs met feasibility and capacity hard gates.",
-            }
-
-        # 5. Multi-Wave Selection
+        # 5. Determine Current Wave
         current_wave = (donation.current_alert_wave or 0) + 1
-        wave_size = WAVE_1_SIZE if current_wave == 1 else WAVE_2_SIZE
+        if urgency == "CRITICAL" and current_wave < 3:
+            current_wave = 3  # Immediate jump to Wave 3 for critical emergency
+        elif donation.status == "accepted" and donation.pickup_mode == "volunteer_dispatch":
+            current_wave = max(2, current_wave)  # Direct to Wave 2 for volunteer courier support
 
-        # Select candidates not previously offered in earlier waves
-        previous_candidate_user_ids = {
+        # Timeout settings
+        timeout_minutes = WAVE_TIMEOUT_CRITICAL_MINUTES if (urgency == "CRITICAL" or current_wave >= 3) else WAVE_TIMEOUT_URGENT_MINUTES
+        wave_timeout_at = now + timedelta(minutes=timeout_minutes)
+
+        # Active offers set to prevent duplicate active offers
+        active_candidate_ids = {
+            row[0] for row in db.query(MatchOffer.candidate_id).filter(
+                MatchOffer.donation_id == donation.id,
+                MatchOffer.status == "offered"
+            ).all()
+        }
+
+        all_offered_candidate_ids = {
             row[0] for row in db.query(MatchOffer.candidate_id).filter(
                 MatchOffer.donation_id == donation.id
             ).all()
         }
 
-        fresh_candidates = [
-            c for c in ranked_ngos if c["user_id"] not in previous_candidate_user_ids
-        ]
+        # Candidate ranking
+        ranked_ngos = cls.find_and_rank_feasible_ngos(db, donation, reference_time=now)
+        ranked_vols = cls.find_and_rank_feasible_volunteers(db, donation, reference_time=now)
 
-        if not fresh_candidates and current_wave > 1:
+        selected_ngos = []
+        selected_vols = []
+
+        # ── WAVE 1: NGO Self-Pickup ──────────────────────────────────────────
+        if current_wave == 1:
+            fresh_ngos = [c for c in ranked_ngos if c["user_id"] not in all_offered_candidate_ids]
+            selected_ngos = fresh_ngos[:WAVE_1_SIZE]
+            if not selected_ngos and ranked_ngos:
+                selected_ngos = [c for c in ranked_ngos if c["user_id"] not in active_candidate_ids][:WAVE_1_SIZE]
+
+            if not selected_ngos:
+                # No feasible NGO for Wave 1 self-pickup -> advance directly to Wave 2 volunteer search
+                current_wave = 2
+
+        # ── WAVE 2: Volunteer Support & Expanded Courier Dispatch ────────────
+        if current_wave == 2:
+            fresh_vols = [v for v in ranked_vols if v["user_id"] not in active_candidate_ids]
+            selected_vols = fresh_vols[:WAVE_2_SIZE]
+
+            # If donation is still pending (no NGO accepted yet), also expand search to next batch of candidate NGOs
+            if donation.status == "pending":
+                fresh_ngos = [c for c in ranked_ngos if c["user_id"] not in all_offered_candidate_ids]
+                selected_ngos = fresh_ngos[:WAVE_1_SIZE]
+                if not selected_ngos and ranked_ngos:
+                    selected_ngos = [c for c in ranked_ngos if c["user_id"] not in active_candidate_ids][:WAVE_1_SIZE]
+
+        # ── WAVE 3: Critical Emergency Broadcast ──────────────────────────────
+        if current_wave >= 3:
+            donation.is_emergency = True
+            selected_ngos = [c for c in ranked_ngos if c["user_id"] not in active_candidate_ids][:WAVE_1_SIZE]
+            selected_vols = [v for v in ranked_vols if v["user_id"] not in active_candidate_ids][:WAVE_2_SIZE]
+
+            # Immediate Admin Escalation for Wave 3 critical rescue
+            cls._escalate_to_admin(
+                db,
+                donation,
+                reason=f"Wave {current_wave} Critical Emergency dispatch active ({remaining_minutes}m rescue window remaining).",
+                remaining_minutes=remaining_minutes,
+            )
+
+        if not selected_ngos and not selected_vols:
             # All candidates exhausted -> Escalate to Admin
             cls._escalate_to_admin(
                 db,
                 donation,
-                reason=f"All {len(ranked_ngos)} candidate NGOs contacted with no response. Escalation required.",
+                reason=f"All candidate NGOs and volunteers exhausted with no active offers. Admin intervention required.",
                 remaining_minutes=remaining_minutes,
             )
             return {
                 "status": "ALL_CANDIDATES_EXHAUSTED",
                 "urgency": urgency,
+                "wave": current_wave,
                 "donation_id": donation.id,
             }
 
-        selected_candidates = fresh_candidates[:wave_size]
-        if not selected_candidates:
-            selected_candidates = ranked_ngos[:wave_size] # Fallback to top ranked if needed
-
-        # 6. Dispatch Notifications & Match Offers to Selected Wave
+        # 6. Dispatch Notifications & MatchOffers
         approx_area = _extract_approximate_area(donation.pickup_address)
-        timeout_minutes = WAVE_TIMEOUT_CRITICAL_MINUTES if urgency == "CRITICAL" else WAVE_TIMEOUT_URGENT_MINUTES
-        wave_timeout_at = now + timedelta(minutes=timeout_minutes)
-
         alerted_ngo_ids = []
-        for cand in selected_candidates:
-            # Create MatchOffer
+        alerted_vol_ids = []
+
+        # Dispatch to Selected NGOs
+        for cand in selected_ngos:
+            if cand["user_id"] in active_candidate_ids:
+                continue
+
             offer = MatchOffer(
                 donation_id=donation.id,
                 candidate_id=cand["user_id"],
@@ -595,10 +801,10 @@ class ProactiveDispatchService:
             )
             db.add(offer)
 
-            # Determine NGO preferred language (if stored, otherwise English)
             ngo_user = db.query(User).filter(User.id == cand["user_id"]).first()
             user_lang = getattr(ngo_user, "preferred_language", "en") if ngo_user else "en"
 
+            safety_adv = donation.ai_safety_disclaimer or (f"Visual condition: {donation.ai_visual_condition}" if donation.ai_visual_condition else None)
             title, msg = format_proactive_alert_message(
                 role="ngo",
                 urgency=urgency,
@@ -609,17 +815,62 @@ class ProactiveDispatchService:
                 distance_km=cand["distance_km"],
                 area_name=approx_area,
                 remaining_minutes=remaining_minutes,
+                food_category=donation.food_category,
+                pickup_address=donation.pickup_address,
+                safety_advisory=safety_adv,
             )
 
-            create_notification(
+            create_event_notification(
                 db=db,
                 user_id=cand["user_id"],
-                title=title,
-                message=msg,
-                type="emergency" if urgency == "CRITICAL" else "alert",
-                related_donation_id=donation.id,
+                event_type="OFFER_RECEIVED",
+                donation_id=donation.id,
+                lang=user_lang,
+                extra_message=msg,
             )
-            alerted_ngo_ids.append(cand["ngo_id"])
+            alerted_ngo_ids.append(cand.get("ngo_id", cand["user_id"]))
+
+        # Dispatch to Selected Volunteers
+        for vol_cand in selected_vols:
+            if vol_cand["user_id"] in active_candidate_ids:
+                continue
+
+            offer = MatchOffer(
+                donation_id=donation.id,
+                candidate_id=vol_cand["user_id"],
+                candidate_type="volunteer",
+                score=vol_cand["score"],
+                status="offered",
+                wave_number=current_wave,
+                offered_at=now,
+                expires_at=wave_timeout_at,
+            )
+            db.add(offer)
+
+            vol_user = db.query(User).filter(User.id == vol_cand["user_id"]).first()
+            user_lang = getattr(vol_user, "preferred_language", "en") if vol_user else "en"
+
+            title, msg = format_proactive_alert_message(
+                role="volunteer",
+                urgency=urgency,
+                language=user_lang,
+                food_name=donation.food_name,
+                quantity=donation.quantity,
+                quantity_unit=donation.quantity_unit,
+                distance_km=vol_cand["distance_km"],
+                area_name=approx_area,
+                remaining_minutes=remaining_minutes,
+            )
+
+            create_event_notification(
+                db=db,
+                user_id=vol_cand["user_id"],
+                event_type="OFFER_RECEIVED",
+                donation_id=donation.id,
+                lang=user_lang,
+                extra_message=msg,
+            )
+            alerted_vol_ids.append(vol_cand["volunteer_id"])
 
         # 7. Notify Donor with Proactive Reassurance
         donor_user = db.query(User).filter(User.id == donation.donor_id).first()
@@ -633,13 +884,14 @@ class ProactiveDispatchService:
             quantity_unit=donation.quantity_unit,
             remaining_minutes=remaining_minutes,
         )
-        create_notification(
+        create_event_notification(
             db=db,
             user_id=donation.donor_id,
-            title=donor_title,
-            message=donor_msg,
-            type="emergency" if urgency == "CRITICAL" else "info",
-            related_donation_id=donation.id,
+            event_type="WAVE_ESCALATED" if current_wave > 1 else "DONATION_CREATED",
+            donation_id=donation.id,
+            lang=donor_lang,
+            extra_message=donor_msg,
+            extra_title=donor_title,
         )
 
         # 8. Update donation wave metadata
@@ -660,8 +912,10 @@ class ProactiveDispatchService:
             "wave": current_wave,
             "urgency": urgency,
             "timestamp": now.isoformat(),
-            "ngo_count": len(selected_candidates),
+            "ngo_count": len(selected_ngos),
+            "volunteer_count": len(selected_vols),
             "alerted_ngo_ids": alerted_ngo_ids,
+            "alerted_volunteer_ids": alerted_vol_ids,
             "timeout_at": wave_timeout_at.isoformat(),
         })
         donation.alert_history_json = json.dumps(history_list)
@@ -671,7 +925,7 @@ class ProactiveDispatchService:
 
         logger.info(
             f"[ProactiveDispatch] Donation #{donation.id} ({urgency}): Wave {current_wave} dispatched to "
-            f"{len(selected_candidates)} NGOs (Timeout in {timeout_minutes}m)."
+            f"{len(selected_ngos)} NGOs and {len(selected_vols)} Volunteers (Timeout in {timeout_minutes}m)."
         )
 
         return {
@@ -679,8 +933,10 @@ class ProactiveDispatchService:
             "donation_id": donation.id,
             "urgency": urgency,
             "wave": current_wave,
-            "alerted_ngo_count": len(selected_candidates),
-            "alerted_ngos": selected_candidates,
+            "alerted_ngo_count": len(selected_ngos),
+            "alerted_volunteer_count": len(selected_vols),
+            "alerted_ngos": selected_ngos,
+            "alerted_volunteers": selected_vols,
             "timeout_minutes": timeout_minutes,
         }
 
@@ -691,29 +947,41 @@ class ProactiveDispatchService:
         reference_time: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Scans pending donations with active alert waves.
-        If a wave has timed out without NGO acceptance, automatically triggers Wave 2 or Admin Escalation.
+        Scans pending and unassigned accepted donations with active alert waves.
+        If a wave has timed out without acceptance:
+        - Wave 1 times out -> Triggers Wave 2 (Volunteer Support).
+        - Wave 2 times out -> Triggers Wave 3 (Critical Emergency).
+        - Wave 3 times out -> Escalates directly to Admin.
         """
         now = reference_time or _utcnow()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        pending_donations = db.query(FoodDonation).filter(
-            FoodDonation.status == "pending",
+        active_donations = db.query(FoodDonation).filter(
+            FoodDonation.status.in_(["pending", "accepted"]),
             FoodDonation.current_alert_wave > 0,
             FoodDonation.wave_timeout_at.isnot(None),
         ).all()
 
         escalated_results = []
 
-        for donation in pending_donations:
+        for donation in active_donations:
+            # Stop if accepted for self-pickup
+            if donation.status == "accepted" and donation.pickup_mode == "self_pickup":
+                continue
+            # Stop if volunteer already assigned
+            if donation.status == "accepted" and donation.assigned_volunteer_id is not None:
+                continue
+
             timeout_at = donation.wave_timeout_at
             if timeout_at and timeout_at.tzinfo is None:
                 timeout_at = timeout_at.replace(tzinfo=timezone.utc)
 
             if timeout_at and now >= timeout_at:
-                logger.info(f"[ProactiveDispatch] Donation #{donation.id} Wave {donation.current_alert_wave} timed out. Escalating.")
-                # Mark timed-out offers as expired
+                logger.info(
+                    f"[ProactiveDispatch] Donation #{donation.id} Wave {donation.current_alert_wave} timed out at {timeout_at}. Escalating."
+                )
+                # Mark timed-out wave offers as expired
                 db.query(MatchOffer).filter(
                     MatchOffer.donation_id == donation.id,
                     MatchOffer.status == "offered",
@@ -721,13 +989,19 @@ class ProactiveDispatchService:
                 ).update({"status": "expired"})
                 db.commit()
 
-                # Trigger next wave or critical escalation
+                # Re-evaluate ERW at execution time
+                eval_res = cls.evaluate_donation_urgency(db, donation, reference_time=now)
+                if eval_res["urgency_level"] == "RESCUE_WINDOW_ENDED" or donation.status == "expired":
+                    continue
+
+                # Trigger next wave
                 dispatch_res = cls.dispatch_proactive_alerts(
                     db, donation, reference_time=now, force_dispatch=True
                 )
                 escalated_results.append({
                     "donation_id": donation.id,
                     "previous_wave": donation.current_alert_wave - 1,
+                    "new_wave": donation.current_alert_wave,
                     "dispatch_result": dispatch_res,
                 })
 
@@ -740,25 +1014,94 @@ class ProactiveDispatchService:
         donation_id: int,
         ngo_user_id: int,
         reference_time: Optional[datetime] = None,
+        pickup_mode: str = "volunteer_dispatch",
+        offer_id: Optional[int] = None,
+        caller_role: str = "ngo",
     ) -> Dict[str, Any]:
         """
         Atomic acceptance lock for NGOs.
         Guarantees that only ONE NGO can accept. Subsequent attempts receive 409 Conflict.
+        Verifies authenticated NGO and verifies that offer belongs to this NGO.
         Revokes all other outstanding wave invitations.
+        If pickup_mode is 'self_pickup', marks self-pickup flow and does NOT create volunteer assignments.
+        If pickup_mode is 'volunteer_dispatch', activates Wave 2 courier dispatch.
         """
         now = reference_time or _utcnow()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
 
-        # 1. Fetch NGO entity
+        # 1. Fetch and verify authenticated NGO entity
         ngo = db.query(NGO).filter(NGO.user_id == ngo_user_id).first()
+        if not ngo and caller_role == "admin":
+            ngo = db.query(NGO).filter(NGO.is_verified == True).first()
         if not ngo:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="NGO profile not found for current user."
             )
+        if not ngo.is_verified and caller_role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your NGO account is not verified. Only verified NGOs can accept donations."
+            )
+        if getattr(ngo, "admin_action_status", None) == "RESTRICTED" and caller_role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your NGO account is currently restricted."
+            )
 
-        # 2. Acquire atomic database lock on the donation
+        # 2. Verify offer belongs to this NGO
+        winning_offer = None
+        if offer_id is not None:
+            offer = db.query(MatchOffer).filter(MatchOffer.id == offer_id).first()
+            if not offer or offer.donation_id != donation_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Specified offer not found for this donation."
+                )
+            if offer.candidate_type != "ngo":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This offer is not for an NGO."
+                )
+            if caller_role != "admin" and offer.candidate_id != ngo_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This offer does not belong to your organization."
+                )
+            if offer.status not in ["offered", "accepted"]:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Offer is no longer active (status: '{offer.status}')."
+                )
+            winning_offer = offer
+            if caller_role == "admin" and offer.candidate_id:
+                admin_ngo = db.query(NGO).filter(NGO.user_id == offer.candidate_id).first()
+                if admin_ngo:
+                    ngo = admin_ngo
+        else:
+            my_offer = db.query(MatchOffer).filter(
+                MatchOffer.donation_id == donation_id,
+                MatchOffer.candidate_id == ngo_user_id,
+                MatchOffer.candidate_type == "ngo",
+                MatchOffer.status == "offered"
+            ).first()
+
+            active_other_offers = db.query(MatchOffer).filter(
+                MatchOffer.donation_id == donation_id,
+                MatchOffer.status == "offered",
+                MatchOffer.candidate_type == "ngo",
+                MatchOffer.candidate_id != ngo_user_id
+            ).count()
+
+            if active_other_offers > 0 and not my_offer and caller_role != "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="This donation is currently under active offer to other shortlisted organizations."
+                )
+            winning_offer = my_offer
+
+        # 3. Acquire atomic database lock on the donation
         donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).with_for_update().first()
         if not donation:
             raise HTTPException(
@@ -766,40 +1109,63 @@ class ProactiveDispatchService:
                 detail="Donation not found."
             )
 
-        # 3. Check if already accepted or cancelled
-        if donation.status != "pending":
+        # 4. Check if rescue window ended (recalculate ERW)
+        cls.evaluate_donation_urgency(db, donation, reference_time=now)
+        if donation.status == "expired":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="This donation has already been accepted by another organization or is no longer available."
+                detail="Estimated rescue window has ended for this donation. Acceptance disabled."
             )
-
-        # 4. Check if rescue window ended
-        cls.evaluate_donation_urgency(db, donation, reference_time=now)
-        if donation.remaining_minutes is not None and donation.remaining_minutes <= 0:
+        elif donation.remaining_minutes is not None and donation.remaining_minutes <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Estimated rescue window has ended for this donation. Acceptance disabled."
             )
 
-        # 5. Check NGO capacity
+        # 5. Check if already accepted or cancelled (verify donation still available)
+        if donation.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"This donation has already been accepted by another organization or is no longer available (status: '{donation.status}')."
+            )
+
+        # 6. Check NGO capacity
         if ngo.current_capacity is not None and ngo.current_capacity < donation.quantity:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Insufficient capacity ({ngo.current_capacity} meals available, {donation.quantity} required)."
             )
 
-        # 6. Apply Atomic State Transition
-        donation.status = "accepted"
+        # 7. Apply Atomic State Transition
         donation.assigned_ngo_id = ngo.id
+        donation.pickup_mode = pickup_mode
         if ngo.current_capacity is not None:
             ngo.current_capacity = max(0.0, ngo.current_capacity - donation.quantity)
 
-        # 7. Update winning offer and record response time
-        winning_offer = db.query(MatchOffer).filter(
-            MatchOffer.donation_id == donation.id,
-            MatchOffer.candidate_id == ngo_user_id,
-            MatchOffer.candidate_type == "ngo"
-        ).first()
+        pickup_label = "Self-Pickup by NGO" if pickup_mode == "self_pickup" else "Volunteer Courier Dispatch Requested"
+        transition_donation_status(
+            db, donation, "accepted",
+            changed_by_user_id=ngo_user_id,
+            caller_role=caller_role,
+            remarks=f"Accepted by NGO: {ngo.organization_name} ({pickup_label})."
+        )
+        if pickup_mode == "self_pickup":
+            log_rescue_operation(
+                db=db,
+                action="self-pickup selected",
+                donation_id=donation.id,
+                user_id=ngo_user_id,
+                remarks="Self-pickup selected by NGO",
+                details=f"NGO #{ngo.id} ({ngo.organization_name}) selected self-pickup for donation #{donation.id}",
+            )
+
+        # 8. Accept offer and record response time
+        if not winning_offer:
+            winning_offer = db.query(MatchOffer).filter(
+                MatchOffer.donation_id == donation.id,
+                MatchOffer.candidate_id == ngo_user_id,
+                MatchOffer.candidate_type == "ngo"
+            ).first()
 
         if winning_offer:
             winning_offer.status = "accepted"
@@ -834,32 +1200,37 @@ class ProactiveDispatchService:
             off.status = "cancelled"
             off.responded_at = now
 
-        # 9. Log donation history
-        history = DonationHistory(
-            donation_id=donation.id,
-            old_status="pending",
-            new_status="accepted",
-            changed_by=ngo_user_id,
-            remarks=f"Accepted by NGO: {ngo.organization_name} (Intake capacity reserved)."
-        )
-        db.add(history)
-
-        # 10. Notify Donor
+        # 9. Notify Donor
         donor = db.query(User).filter(User.id == donation.donor_id).first()
-        create_notification(
+        donor_lang = getattr(donor, "preferred_language", "en") if donor else "en"
+        create_event_notification(
             db=db,
             user_id=donation.donor_id,
-            title="Food Donation Accepted by NGO",
-            message=f"'{donation.food_name}' has been accepted by '{ngo.organization_name}'. Transport matching is in progress.",
-            type="donation",
-            related_donation_id=donation.id,
+            event_type="OFFER_ACCEPTED",
+            donation_id=donation.id,
+            lang=donor_lang,
+            extra_message=f"'{donation.food_name}' has been accepted by '{ngo.organization_name}' ({pickup_label}).",
+        )
+
+        log_audit_event(
+            db,
+            action="donation_accepted",
+            user_id=ngo_user_id,
+            resource_type="donation",
+            resource_id=donation.id,
+            status_code="success",
+            details=f"NGO '{ngo.organization_name}' accepted donation #{donation.id} ({pickup_label})."
         )
 
         db.commit()
         db.refresh(donation)
 
+        # 10. If volunteer courier requested, trigger Wave 2 courier dispatch
+        if pickup_mode == "volunteer_dispatch":
+            cls.dispatch_proactive_alerts(db, donation, reference_time=now, force_dispatch=True)
+
         logger.info(
-            f"[ProactiveDispatch] Donation #{donation.id} ATOMICALLY ACCEPTED by NGO #{ngo.id} ({ngo.organization_name})."
+            f"[ProactiveDispatch] Donation #{donation.id} ATOMICALLY ACCEPTED by NGO #{ngo.id} ({ngo.organization_name}) [{pickup_label}]."
         )
 
         return {
@@ -867,6 +1238,7 @@ class ProactiveDispatchService:
             "donation_id": donation.id,
             "assigned_ngo_id": ngo.id,
             "organization_name": ngo.organization_name,
+            "pickup_mode": pickup_mode,
             "accepted_at": now.isoformat(),
             "remaining_minutes": donation.remaining_minutes,
         }
@@ -977,12 +1349,33 @@ class BackgroundUrgencyMonitor:
             # Check wave timeouts
             escalations = ProactiveDispatchService.check_and_escalate_unresponsive_waves(db, reference_time=now)
 
+            # Continuous Feasibility & Telemetry Staleness Monitoring for Active Rescues
+            from app.services.rematching_service import rematching_service
+            active_rescues = db.query(FoodDonation).filter(
+                FoodDonation.status.in_(["volunteer_assigned", "en_route", "in_transit"]),
+                FoodDonation.assigned_volunteer_id.isnot(None)
+            ).all()
+
+            rematches_triggered = 0
+            for rescue in active_rescues:
+                health = rematching_service.verify_active_assignment_health(db, rescue, reference_time=now)
+                if health.get("requires_rematch"):
+                    rematch_res = rematching_service.attempt_dynamic_rematch(
+                        db=db,
+                        donation=rescue,
+                        trigger=health.get("trigger", "HEALTH_CHECK_FAILED"),
+                        reason=health.get("reason", "Automated feasibility/telemetry check triggered rematch")
+                    )
+                    if rematch_res.get("status") == "REMATCHED":
+                        rematches_triggered += 1
+
             return {
                 "status": "SUCCESS",
                 "timestamp": now.isoformat(),
                 "active_donations_evaluated": evaluated_count,
                 "dispatches_triggered": dispatched_count,
                 "escalations_count": len(escalations),
+                "rematches_triggered": rematches_triggered,
             }
         finally:
             db.close()

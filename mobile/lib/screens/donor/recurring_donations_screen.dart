@@ -138,10 +138,34 @@ class _RecurringDonationsScreenState extends State<RecurringDonationsScreen> {
         label: const Text('New Schedule'),
         onPressed: _showCreateDialog,
       ),
-      body: donationProv.isLoading
-          ? const LoadingStateWidget(message: 'Loading recurring profiles...')
-          : donationProv.recurringDonations.isEmpty
-              ? EmptyStateWidget(
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            color: Colors.amber.shade50,
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, color: Colors.amber.shade900, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'D7: Kitchen / Repeat Profile — Phase 2 Stub (MVP Placeholder)',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.amber.shade900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: donationProv.isLoading
+                ? const LoadingStateWidget(message: 'Loading recurring profiles...')
+                : donationProv.recurringDonations.isEmpty
+                    ? EmptyStateWidget(
                   title: 'No Recurring Schedules',
                   subtitle: 'Set up recurring schedules for daily surplus food from your buffet or kitchen for 1-tap instant donations.',
                   icon: Icons.repeat,
@@ -246,6 +270,9 @@ class _RecurringDonationsScreenState extends State<RecurringDonationsScreen> {
                   );
                 },
               ),
+          ),
+        ],
+      ),
     );
   }
 }

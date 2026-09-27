@@ -156,66 +156,106 @@ class _DonorDashboardScreenState extends State<DonorDashboardScreen> {
               ),
               const SizedBox(height: AppTheme.space16),
 
-              // ── 1. PRIMARY HERO BANNER ─────────────────────────────────────
-              if (isFirstTimeDonor)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(AppTheme.space20),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppTheme.primaryGreen, AppTheme.primaryDark],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(AppTheme.radiusFeatureCard),
-                    boxShadow: AppTheme.shadowFeature,
+              // ── 1. PRIMARY ACTION-FIRST HERO: QUICK RESCUE ──────────────────
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space20),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [AppTheme.primaryGreen, AppTheme.primaryDark],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(AppTheme.radiusPill),
-                        ),
-                        child: Text(
-                          context.tr('donate_now').toUpperCase(),
-                          style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                        ),
-                      ),
-                      const SizedBox(height: AppTheme.space12),
-                      Text(
-                        context.tr('tagline'),
-                        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold, height: 1.3),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        context.tr('donate_surplus_desc'),
-                        style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
-                      ),
-                      const SizedBox(height: AppTheme.space16),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: ElevatedButton.icon(
-                              onPressed: () => context.push('/donor/create'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.white,
-                                foregroundColor: AppTheme.primaryDark,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
-                              ),
-                              icon: const Icon(Icons.add_circle, size: 20),
-                              label: Text(context.tr('donate_now').toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold)),
-                            ),
+                  borderRadius: BorderRadius.circular(AppTheme.radiusFeatureCard),
+                  boxShadow: AppTheme.shadowFeature,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
                           ),
-                        ],
+                          child: const Icon(Icons.bolt, color: Colors.white, size: 20),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          context.tr('quick_rescue_title').toUpperCase(),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.0,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppTheme.space12),
+                    Text(
+                      context.tr('tagline'),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        height: 1.25,
                       ),
-                    ],
-                  ),
-                )
-              else
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      context.tr('quick_rescue_desc'),
+                      style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+                    ),
+                    const SizedBox(height: AppTheme.space20),
+                    // Action-First Primary Large Green Button
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton.icon(
+                        onPressed: () => context.push('/donor/quick-rescue'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white,
+                          foregroundColor: AppTheme.primaryDark,
+                          elevation: 3,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppTheme.radiusButton),
+                          ),
+                        ),
+                        icon: const Icon(Icons.camera_alt_rounded, size: 22, color: AppTheme.primaryDark),
+                        label: Text(
+                          context.tr('scan_or_camera').toUpperCase(),
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: () => context.push('/donor/create'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white70,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                        ),
+                        icon: const Icon(Icons.edit_note_rounded, size: 16, color: Colors.white70),
+                        label: Text(
+                          '${context.tr('details')} / Manual Entry →',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+
+              if (!isFirstTimeDonor)
                 // Repeat Donor Hero Impact Summary Card
                 Container(
                   width: double.infinity,

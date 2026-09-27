@@ -75,10 +75,42 @@ export const api = {
     body: JSON.stringify({ failure_type: failureType, reason, remarks })
   }),
 
-  // Admin
+  // Admin Operational Control Center
   getStats: () => request('/admin/statistics'),
   getHeatmap: () => request('/admin/waste-heatmap'),
   getUsers: () => request('/admin/users'),
   getNgos: () => request('/admin/ngos'),
+  getReceivingSummary: () => request('/admin/receiving/summary'),
+  getReceivingQueue: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/admin/receiving${qs ? `?${qs}` : ''}`);
+  },
+  getRescueDetail: (id) => request(`/admin/rescues/${id}`),
+  getInterventions: () => request('/admin/interventions'),
+  submitIntervention: (data) => request('/admin/interventions', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  }),
+  getNgoCapacities: () => request('/admin/ngos/capacity'),
+  getCategoryBreakdown: () => request('/admin/category-breakdown'),
+
+  // Wave Dispatch Engine
+  getDispatchStatus: (donationId) => request(`/donations/${donationId}/dispatch-status`),
+  triggerProactiveDispatch: (donationId) => request(`/donations/${donationId}/trigger-dispatch`, { method: 'POST' }),
+  runUrgencyMonitorCycle: () => request('/donations/monitor-urgency', { method: 'POST' }),
+
+  // Real-time Notifications & System Health
+  getNotificationFeed: (since = null, limit = 50) => {
+    const qs = new URLSearchParams({ limit });
+    if (since) qs.append('since', since);
+    return request(`/notifications/feed?${qs.toString()}`);
+  },
+  createNotificationEventSource: () => {
+    const token = localStorage.getItem('auth_token');
+    return new EventSource(`${API_BASE}/notifications/stream?token=${encodeURIComponent(token || '')}`);
+  },
+  getHealth: () => request('/health'),
+  getHealthReady: () => request('/health/ready'),
+  getHealthLive: () => request('/health/live'),
 };
 

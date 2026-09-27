@@ -5,10 +5,21 @@ import '../models/ngo_model.dart';
 class NgoProvider extends ChangeNotifier {
   final ApiClient _apiClient = ApiClient();
   List<NgoModel> _ngos = [];
+  NgoModel? _myNgo;
   bool _isLoading = false;
 
   List<NgoModel> get ngos => _ngos;
+  NgoModel? get myNgo => _myNgo;
+  bool get isVerified => _myNgo?.isVerified ?? true;
   bool get isLoading => _isLoading;
+
+  Future<void> fetchMyNgo() async {
+    try {
+      final response = await _apiClient.dio.get('/ngos/me');
+      _myNgo = NgoModel.fromJson(response.data);
+      notifyListeners();
+    } catch (_) {}
+  }
 
   Future<void> fetchNgos() async {
     _isLoading = true;

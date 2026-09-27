@@ -202,6 +202,26 @@ def test_final_comprehensive_validation_pass():
         # -------------------------------------------------------------
         # STEP 2: NGO Accepts Donation
         # -------------------------------------------------------------
+        # Ensure NGO has an active offer for this donation
+        from app.models.models import MatchOffer
+        offer = db.query(MatchOffer).filter(
+            MatchOffer.donation_id == donation_id,
+            MatchOffer.candidate_id == ngo_user.id,
+            MatchOffer.candidate_type == "ngo"
+        ).first()
+        if not offer:
+            offer = MatchOffer(
+                donation_id=donation_id,
+                candidate_id=ngo_user.id,
+                candidate_type="ngo",
+                score=95.0,
+                status="offered",
+                wave_number=1,
+                offered_at=datetime.now(timezone.utc)
+            )
+            db.add(offer)
+            db.commit()
+
         res_accept = client.post(
             f"/api/donations/{donation_id}/accept",
             headers={"Authorization": f"Bearer {ngo_token}"}

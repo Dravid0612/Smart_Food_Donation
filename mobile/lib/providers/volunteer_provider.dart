@@ -35,4 +35,22 @@ class VolunteerProvider extends ChangeNotifier {
       return false;
     }
   }
+
+  Future<bool> updateVehicleProfile({required String vehicleType, required int carryingCapacity}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await _apiClient.dio.put('/volunteers/profile', data: {
+        'vehicle_type': vehicleType.toLowerCase(),
+        'carrying_capacity': carryingCapacity,
+      });
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
 }

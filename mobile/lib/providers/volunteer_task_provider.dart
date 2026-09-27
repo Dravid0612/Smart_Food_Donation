@@ -30,6 +30,12 @@ class VolunteerTaskProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  @visibleForTesting
+  void setTasksForTesting(List<DonationModel> tasks) {
+    _assignedTasks = tasks;
+    notifyListeners();
+  }
+
   Future<void> fetchMyTasks() async {
     _isLoading = true;
     _errorMessage = null;
@@ -238,6 +244,111 @@ class VolunteerTaskProvider with ChangeNotifier {
       await fetchMyTasks();
       return true;
     } catch (_) {
+      return false;
+    }
+  }
+
+  /// Public preview for shareable rescue claim link
+  Future<RescueClaimPreviewModel?> fetchClaimPreview(String token) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      final response = await _apiClient.dio.get('/volunteers/claims/$token');
+      _isLoading = false;
+      notifyListeners();
+      return RescueClaimPreviewModel.fromJson(response.data);
+    } on DioException catch (e) {
+      _isLoading = false;
+      if (e.response?.data != null && e.response?.data is Map && e.response?.data['detail'] != null) {
+        _errorMessage = e.response?.data['detail'].toString();
+      } else {
+        _errorMessage = e.message ?? 'Invalid or expired claim link.';
+      }
+      notifyListeners();
+      return null;
+    } catch (e) {
+      _isLoading = false;
+      _errorMessage = 'Failed to load rescue preview.';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Frictionless first-time volunteer claim acceptance
+  Future<RescueClaimAcceptResult?> acceptClaim({
+    required String token,
+    required String name,
+    required String phone,
+    String vehicleType = 'bike',
+    int carryingCapacity = 50,
+    double? currentLat,
+    double? currentLon,
+  }) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      final response = await _apiClient.dio.post('/volunteers/claims/$token/accept', data: {
+        'name': name.trim(),
+        'phone': phone.trim(),
+        'vehicle_type': vehicleType,
+        'carrying_capacity': carryingCapacity,
+        'current_lat': currentLat,
+        'current_lon': currentLon,
+      });
+      final result = RescueClaimAcceptResult.fromJson(response.data);
+      _isLoading = false;
+      notifyListeners();
+      return result;
+    } on DioException catch (e) {
+      _isLoading = false;
+      if (e.response?.data != null && e.response?.data is Map && e.response?.data['detail'] != null) {
+        _errorMessage = e.response?.data['detail'].toString();
+      } else {
+        _errorMessage = e.message ?? 'Failed to claim rescue.';
+      }
+      notifyListeners();
+      return null;
+    } catch (e) {
+      _isLoading = false;
+      _errorMessage = 'Error claiming rescue.';
+      notifyListeners();
+      return null;
+    }
+  }
+
+  /// Optional account upgrade after completing first rescue
+  Future<bool> upgradeAccount({
+    required String email,
+    required String password,
+    String preferredLanguage = 'en',
+  }) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+    try {
+      await _apiClient.dio.post('/volunteers/upgrade-account', data: {
+        'email': email.trim().toLowerCase(),
+        'password': password,
+        'preferred_language': preferredLanguage,
+      });
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on DioException catch (e) {
+      _isLoading = false;
+      if (e.response?.data != null && e.response?.data is Map && e.response?.data['detail'] != null) {
+        _errorMessage = e.response?.data['detail'].toString();
+      } else {
+        _errorMessage = e.message ?? 'Failed to upgrade account.';
+      }
+      notifyListeners();
+      return false;
+    } catch (e) {
+      _isLoading = false;
+      _errorMessage = 'Error upgrading account.';
+      notifyListeners();
       return false;
     }
   }

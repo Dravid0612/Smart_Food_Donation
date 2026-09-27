@@ -19,6 +19,7 @@ from app.models.models import (
 from app.services.route_service import route_service, haversine_distance_km
 from app.services.food_rescue_window_service import calculate_rescue_feasibility
 from app.services.security_service import log_audit_event
+from app.services.notification_service import create_event_notification
 
 logger = logging.getLogger("smart_food_rescue.live_tracking")
 
@@ -152,6 +153,12 @@ class LiveTrackingService:
         if straight_dist is not None and straight_dist <= PROXIMITY_ARRIVAL_KM:
             if stage in ["volunteer_assigned", "assigned", "accepted", "en_route", "pickup_en_route"]:
                 donation.tracking_status = "ARRIVED_AT_DONOR"
+                create_event_notification(
+                    db=db,
+                    user_id=donation.donor_id,
+                    event_type="VOLUNTEER_ARRIVING",
+                    donation_id=donation.id,
+                )
             elif stage in ["in_transit", "collected"]:
                 donation.tracking_status = "ARRIVED_AT_NGO"
         else:

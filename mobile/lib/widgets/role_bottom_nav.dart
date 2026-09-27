@@ -28,9 +28,6 @@ class RoleBottomNav extends StatelessWidget {
                 context.push('/ngo/requirements');
                 break;
               case 2:
-                context.go('/ngo/history');
-                break;
-              case 3:
                 context.push('/profile');
                 break;
             }
@@ -45,11 +42,6 @@ class RoleBottomNav extends StatelessWidget {
               icon: const Icon(Icons.tune_outlined),
               selectedIcon: const Icon(Icons.tune),
               label: context.tr('nav_requirements'),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.history_edu_outlined),
-              selectedIcon: const Icon(Icons.history_edu),
-              label: context.tr('nav_history'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.person_outline),
@@ -108,10 +100,10 @@ class RoleBottomNav extends StatelessWidget {
                 context.go('/admin/donations');
                 break;
               case 2:
-                context.go('/admin/donations');
+                context.go('/admin/users');
                 break;
               case 3:
-                context.push('/admin/disputes');
+                context.push('/admin/verify-ngos');
                 break;
               case 4:
                 context.push('/profile');
@@ -120,24 +112,24 @@ class RoleBottomNav extends StatelessWidget {
           },
           destinations: [
             NavigationDestination(
-              icon: const Icon(Icons.home_outlined),
-              selectedIcon: const Icon(Icons.home),
-              label: context.tr('nav_dashboard'),
+              icon: const Icon(Icons.dashboard_outlined),
+              selectedIcon: const Icon(Icons.dashboard),
+              label: context.tr('overview'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.local_shipping_outlined),
               selectedIcon: const Icon(Icons.local_shipping),
-              label: context.tr('nav_rescues'),
+              label: context.tr('nav_donations'),
             ),
             NavigationDestination(
-              icon: const Icon(Icons.inventory_2_outlined),
-              selectedIcon: const Icon(Icons.inventory_2),
+              icon: const Icon(Icons.people_alt_outlined),
+              selectedIcon: const Icon(Icons.people_alt),
+              label: context.tr('users'),
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.verified_outlined),
+              selectedIcon: const Icon(Icons.verified),
               label: context.tr('nav_receiving'),
-            ),
-            NavigationDestination(
-              icon: const Icon(Icons.report_problem_outlined),
-              selectedIcon: const Icon(Icons.report_problem),
-              label: context.tr('nav_issues'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.person_outline),

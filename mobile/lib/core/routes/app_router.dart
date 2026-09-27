@@ -9,6 +9,7 @@ import '../../screens/auth/ngo_login_screen.dart';
 import '../../screens/auth/volunteer_login_screen.dart';
 import '../../screens/auth/admin_login_screen.dart';
 import '../../screens/auth/register_screen.dart';
+import '../../screens/auth/forgot_password_screen.dart';
 
 // Donor
 import '../../screens/donor/donor_dashboard.dart';
@@ -23,20 +24,23 @@ import '../../screens/donor/why_donate_screen.dart';
 import '../../screens/donor/how_it_works_screen.dart';
 import '../../screens/donor/donor_impact_dashboard_screen.dart';
 import '../../screens/donor/donor_secure_otp_screen.dart';
+import '../../screens/donor/quick_rescue_screen.dart';
 import '../../screens/onboarding/donor_onboarding_screen.dart';
 
 // NGO
 import '../../screens/ngo/ngo_dashboard.dart';
 import '../../screens/ngo/ngo_food_requirements_screen.dart';
 import '../../screens/ngo/ngo_history_screen.dart';
-import '../../screens/ngo/ngo_receiving_screen.dart';
-import '../../screens/ngo/ngo_distribution_screen.dart';
+import '../../screens/ngo/ngo_receiving_distribution_screen.dart';
 
 // Volunteer
 import '../../screens/volunteer/volunteer_dashboard.dart';
 import '../../screens/volunteer/volunteer_pickup_request_screen.dart';
 import '../../screens/volunteer/volunteer_active_task_screen.dart';
 import '../../screens/volunteer/volunteer_impact_screen.dart';
+import '../../screens/volunteer/volunteer_claim_screen.dart';
+import '../../screens/volunteer/volunteer_vehicle_profile_screen.dart';
+import '../../screens/volunteer/volunteer_task_history_screen.dart';
 
 // Admin
 import '../../screens/admin/admin_dashboard.dart';
@@ -46,6 +50,7 @@ import '../../screens/admin/ngo_verification_screen.dart';
 import '../../screens/admin/admin_interventions_screen.dart';
 import '../../screens/admin/admin_disputes_screen.dart';
 import '../../screens/admin/admin_performance_screen.dart';
+import '../../screens/admin/admin_audit_log_screen.dart';
 
 // Shared
 import '../../screens/notifications/notification_center_screen.dart';
@@ -62,7 +67,9 @@ final GoRouter appRouter = GoRouter(
     final isPublicRoute = location == '/' ||
         location == '/onboarding' ||
         location.startsWith('/login') ||
-        location == '/register';
+        location == '/register' ||
+        location == '/forgot-password' ||
+        location.startsWith('/claim');
 
     // 1. If not authenticated and trying to access protected route -> go to /login
     if (token == null || token.isEmpty || userData == null) {
@@ -78,7 +85,7 @@ final GoRouter appRouter = GoRouter(
     } catch (_) {}
 
     // 3. If already logged in and visiting public auth screens, redirect to role dashboard
-    if (location.startsWith('/login') || location == '/register' || location == '/onboarding' || location == '/') {
+    if (location.startsWith('/login') || location == '/register' || location == '/forgot-password' || location == '/onboarding' || location == '/') {
       switch (role) {
         case 'ngo':
           return '/ngo';
@@ -121,6 +128,7 @@ final GoRouter appRouter = GoRouter(
     GoRoute(path: '/login/ngo', builder: (context, state) => const NgoLoginScreen()),
     GoRoute(path: '/login/volunteer', builder: (context, state) => const VolunteerLoginScreen()),
     GoRoute(path: '/login/admin', builder: (context, state) => const AdminLoginScreen()),
+    GoRoute(path: '/forgot-password', builder: (context, state) => const ForgotPasswordScreen()),
     GoRoute(
       path: '/register',
       builder: (context, state) {
@@ -143,6 +151,13 @@ final GoRouter appRouter = GoRouter(
       builder: (context, state) {
         final extra = state.extra as Map<String, dynamic>?;
         return CreateDonationScreen(aiData: extra);
+      },
+    ),
+    GoRoute(
+      path: '/donor/quick-rescue',
+      builder: (context, state) {
+        final extra = state.extra as String?;
+        return QuickRescueScreen(initialImagePath: extra);
       },
     ),
     GoRoute(
@@ -187,19 +202,21 @@ final GoRouter appRouter = GoRouter(
       path: '/ngo/receiving/:id',
       builder: (context, state) {
         final id = int.parse(state.pathParameters['id'] ?? '1');
-        return NgoReceivingScreen(donationId: id);
+        return NgoReceivingDistributionScreen(donationId: id);
       },
     ),
     GoRoute(
       path: '/ngo/distribution/:id',
       builder: (context, state) {
         final id = int.parse(state.pathParameters['id'] ?? '1');
-        return NgoDistributionScreen(donationId: id);
+        return NgoReceivingDistributionScreen(donationId: id);
       },
     ),
 
     // ─── Volunteer Routes ────────────────────────────────────────────────────
     GoRoute(path: '/volunteer', builder: (context, state) => const VolunteerDashboardScreen()),
+    GoRoute(path: '/volunteer/vehicle', builder: (context, state) => const VolunteerVehicleProfileScreen()),
+    GoRoute(path: '/volunteer/history', builder: (context, state) => const VolunteerTaskHistoryScreen()),
     GoRoute(
       path: '/volunteer/request/:id',
       builder: (context, state) {
@@ -224,9 +241,19 @@ final GoRouter appRouter = GoRouter(
     GoRoute(path: '/admin/interventions', builder: (context, state) => const AdminInterventionsScreen()),
     GoRoute(path: '/admin/disputes', builder: (context, state) => const AdminDisputesScreen()),
     GoRoute(path: '/admin/performance', builder: (context, state) => const AdminPerformanceScreen()),
+    GoRoute(path: '/admin/audit-logs', builder: (context, state) => const AdminAuditLogScreen()),
 
     // ─── Shared Routes ───────────────────────────────────────────────────────
     GoRoute(path: '/notifications', builder: (context, state) => const NotificationCenterScreen()),
     GoRoute(path: '/profile', builder: (context, state) => const ProfileScreen()),
+
+    // ─── Public Shareable Claim Route ─────────────────────────────────────────
+    GoRoute(
+      path: '/claim/:token',
+      builder: (context, state) {
+        final token = state.pathParameters['token'] ?? '';
+        return VolunteerClaimScreen(token: token);
+      },
+    ),
   ],
 );

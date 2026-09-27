@@ -17,6 +17,8 @@ from app.schemas.schemas import (
 from app.core.dependencies import require_role
 from app.services.urgency_service import calculate_urgency
 from app.services.security_service import log_audit_event
+from app.services.state_machine_service import transition_donation_status, transition_donation_state
+from app.services.notification_service import create_event_notification
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -300,7 +302,7 @@ def get_admin_receiving_records(
 
     # 1. Apply Tab Filter
     if tab_upper == "EXPECTED":
-        query = query.filter(FoodDonation.status.in_(["accepted", "volunteer_assigned", "en_route", "pickup_en_route"]))
+        query = query.filter(FoodDonation.status.in_(["accepted", "volunteer_assigned"]))
     elif tab_upper == "ARRIVING":
         query = query.filter(FoodDonation.status.in_(["collected", "in_transit", "arrived_at_donor"]))
     elif tab_upper == "RECEIVED":
@@ -547,6 +549,17 @@ def submit_admin_intervention(
         donation.is_emergency = True
         donation.escalated_at = datetime.now(timezone.utc)
 
+    if payload.target_status:
+        transition_donation_status(
+            db=db,
+            donation=donation,
+            target_status=payload.target_status,
+            changed_by_user_id=current_user.id,
+            caller_role=current_user.role,
+            remarks=f"Admin intervention ({payload.reason_code}): {payload.notes or ''}".strip(),
+            force=True,
+        )
+
     db.commit()
 
     # Log to audit trail
@@ -559,6 +572,31 @@ def submit_admin_intervention(
         status_code="success",
         details=f"Intervention Reason: {payload.reason_code}. Notes: {payload.notes or 'None'}. Action: {payload.action_type}"
     )
+
+    # Emit canonical ADMIN_INTERVENTION event notifications
+    create_event_notification(
+        db=db,
+        user_id=donation.donor_id,
+        event_type="ADMIN_INTERVENTION",
+        donation_id=donation.id,
+        extra_message=f"Admin intervention applied: {payload.reason_code.replace('_', ' ').title()}."
+    )
+    if donation.assigned_volunteer_id:
+        create_event_notification(
+            db=db,
+            user_id=donation.assigned_volunteer_id,
+            event_type="ADMIN_INTERVENTION",
+            donation_id=donation.id,
+            extra_message=f"Admin intervention applied: {payload.reason_code.replace('_', ' ').title()}."
+        )
+    if donation.assigned_ngo and donation.assigned_ngo.user_id:
+        create_event_notification(
+            db=db,
+            user_id=donation.assigned_ngo.user_id,
+            event_type="ADMIN_INTERVENTION",
+            donation_id=donation.id,
+            extra_message=f"Admin intervention applied: {payload.reason_code.replace('_', ' ').title()}."
+        )
 
     return AdminInterventionActionResponse(
         success=True,
@@ -768,6 +806,43 @@ def get_donations_requiring_intervention(
         urgent_count=urgent_count,
         items=items
     )
+
+# ── 9. A7 AUDIT LOG VIEWER ───────────────────────────────────────────────────
+
+@router.get("/audit-logs")
+def get_audit_logs(
+    limit: int = Query(50, ge=1, le=200),
+    action: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["admin"]))
+):
+    """
+    Read-only security log for operational auditing (A7).
+    Never exposes sensitive tokens or OTP values.
+    """
+    query = db.query(AuditLog).order_by(AuditLog.created_at.desc())
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if status:
+        query = query.filter(AuditLog.status == status)
+    logs = query.limit(limit).all()
+    return [
+        {
+            "id": log.id,
+            "timestamp": log.created_at.isoformat() if log.created_at else None,
+            "user_id": log.user_id,
+            "actor": log.user.name if log.user else (f"User #{log.user_id}" if log.user_id else "System"),
+            "action": log.action,
+            "resource_type": log.resource_type,
+            "resource_id": log.resource_id,
+            "ip_address": log.ip_address,
+            "status": log.status,
+            "details": log.details
+        }
+        for log in logs
+    ]
+
 
 
 

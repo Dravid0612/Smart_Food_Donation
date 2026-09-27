@@ -9,6 +9,9 @@ import '../../providers/notification_provider.dart';
 import '../../widgets/availability_toggle.dart';
 import '../../widgets/vehicle_capacity_card.dart';
 import '../../widgets/donation_card.dart';
+import '../../widgets/rescue_ring.dart';
+import '../../widgets/urgency_badge.dart';
+import '../../core/utils/food_rescue_status_helper.dart';
 import '../../widgets/skeleton_loader.dart';
 import '../../widgets/empty_state_widget.dart';
 import '../../widgets/role_bottom_nav.dart';
@@ -42,6 +45,40 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
         .setAvailability(newStatus == 'available');
   }
 
+  Future<void> _handleAcceptRescue(int taskId) async {
+    final taskProv = Provider.of<VolunteerTaskProvider>(context, listen: false);
+    final ok = await taskProv.acceptPickupRequest(taskId);
+    if (!mounted) return;
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${context.tr('accept_rescue')}! 🛵'),
+          backgroundColor: AppTheme.primaryGreen,
+        ),
+      );
+      _loadData();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(taskProv.errorMessage != null ? context.trError(taskProv.errorMessage!) : context.trError('err_server')),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    }
+  }
+
+  Future<void> _handlePassRescue(int taskId) async {
+    final taskProv = Provider.of<VolunteerTaskProvider>(context, listen: false);
+    final ok = await taskProv.rejectPickupRequest(taskId);
+    if (!mounted) return;
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.tr('pass'))),
+      );
+      _loadData();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthProvider>(context);
@@ -52,9 +89,25 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
     final activeTasks = taskProv.assignedTasks
         .where((d) => ['volunteer_assigned', 'collected'].contains(d.status.toLowerCase()))
         .toList();
-    final availablePickups = taskProv.assignedTasks
-        .where((d) => d.status.toLowerCase() == 'accepted')
-        .toList();
+
+    // Show ONLY tasks that are genuinely feasible
+    final availablePickups = taskProv.assignedTasks.where((d) {
+      if (d.status.toLowerCase() != 'accepted') return false;
+
+      final remainingMins = d.remainingMinutes ??
+          FoodRescueStatusHelper.calculateRemainingMinutes(d.expiryTime);
+      if (remainingMins <= 0) return false;
+
+      if (d.feasibility != null && !d.feasibility!.isFeasible) return false;
+
+      final fStatus = d.feasibilityStatus.toUpperCase().trim();
+      if (fStatus == 'INFEASIBLE' || fStatus == 'RESCUE_UNLIKELY' || fStatus == 'WINDOW_ENDED') {
+        return false;
+      }
+
+      return true;
+    }).toList();
+
     final completedTasks = taskProv.assignedTasks
         .where((d) => ['delivered', 'completed'].contains(d.status.toLowerCase()))
         .toList();
@@ -95,6 +148,11 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
                 ),
             ],
           ),
+          IconButton(
+            icon: const Icon(Icons.history_outlined),
+            tooltip: context.tr('task_history'),
+            onPressed: () => context.push('/volunteer/history'),
+          ),
           IconButton(icon: const Icon(Icons.account_circle_outlined), onPressed: () => context.push('/profile')),
         ],
       ),
@@ -106,10 +164,11 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── 1. VEHICLE PROFILE & CAPACITY CARD ────────────────────────
+              // ── 1. VEHICLE PROFILE & CAPACITY CARD (V5) ───────────────────
               VehicleCapacityCard(
                 vehicleType: user?.vehicleType ?? 'Bike',
-                capacity: user?.carryingCapacity ?? 50,
+                capacity: user?.carryingCapacity ?? 25,
+                onEdit: () => context.push('/volunteer/vehicle'),
               ),
               const SizedBox(height: AppTheme.space16),
 
@@ -210,7 +269,12 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
                           ),
                           icon: const Icon(Icons.navigation_outlined, size: 18),
-                          label: Text(context.tr('rescue_live_tracking'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                          label: Text(
+                            task.status.toLowerCase() == 'collected'
+                                ? context.tr('action_deliver')
+                                : context.tr('action_go_to_pickup'),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
                         ),
                       ),
                     ],
@@ -240,62 +304,199 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
                 else ...[
                   if (availablePickups.isNotEmpty) ...[
                     ...availablePickups.map((task) {
-                      final fitsCapacity = task.quantity <= (user?.carryingCapacity ?? 50);
+                      final remainingMins = task.remainingMinutes ??
+                          FoodRescueStatusHelper.calculateRemainingMinutes(task.expiryTime);
+                      final urgencyInfo = FoodRescueStatusHelper.getRescueUrgency(
+                        context,
+                        task.urgencyLevel,
+                        remainingMinutes: remainingMins,
+                      );
+
                       return Container(
-                        margin: const EdgeInsets.only(bottom: AppTheme.space12),
+                        margin: const EdgeInsets.only(bottom: AppTheme.space16),
                         padding: const EdgeInsets.all(AppTheme.space16),
                         decoration: BoxDecoration(
                           color: AppTheme.card,
                           borderRadius: BorderRadius.circular(AppTheme.radiusCard),
-                          border: Border.all(
-                            color: fitsCapacity ? AppTheme.primaryGreen.withValues(alpha: 0.3) : AppTheme.error.withValues(alpha: 0.3),
-                          ),
+                          border: Border.all(color: AppTheme.border),
+                          boxShadow: AppTheme.shadowCard,
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // Top Row: Category + Urgency Badge
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Expanded(
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryGreen.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                                  ),
                                   child: Text(
-                                    context.trFood(task.foodName),
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                    context.trCategory(task.foodCategory).toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppTheme.primaryGreen,
+                                      letterSpacing: 0.4,
+                                    ),
                                   ),
                                 ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: fitsCapacity ? AppTheme.primaryGreen.withValues(alpha: 0.1) : AppTheme.error.withValues(alpha: 0.1),
-                                    borderRadius: BorderRadius.circular(8),
+                                UrgencyBadge(
+                                  level: urgencyInfo.rawKey,
+                                  remainingMinutes: remainingMins,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: AppTheme.space12),
+
+                            // Row: Food Name, Quantity & Rescue Ring
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        context.trFood(task.foodName),
+                                        style: const TextStyle(
+                                          fontSize: 17,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppTheme.textPrimary,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        '${task.quantity.toInt()} ${context.trUnit(task.quantityUnit)}',
+                                        style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.bold,
+                                          color: AppTheme.primaryGreen,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  child: Text(
-                                    '${task.quantity.toInt()} ${context.trUnit(task.quantityUnit)}',
-                                    style: TextStyle(
-                                      color: fitsCapacity ? AppTheme.primaryGreen : AppTheme.error,
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 13,
+                                ),
+                                const SizedBox(width: AppTheme.space12),
+                                RescueRing.compact(
+                                  remainingMinutes: remainingMins,
+                                  urgencyOverride: task.urgencyLevel,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: AppTheme.space12),
+
+                            // Logistics Details: Pickup Area, Drop-off Area, Distance & Estimated Time
+                            Container(
+                              padding: const EdgeInsets.all(AppTheme.space10),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade50,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade200),
+                              ),
+                              child: Column(
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.store_outlined, size: 15, color: AppTheme.textSecondary),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '${context.tr('pickup_area')}: ',
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          task.pickupAddress,
+                                          style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.home_work_outlined, size: 15, color: AppTheme.primaryGreen),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '${context.tr('dropoff_area')}: ',
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                                      ),
+                                      Expanded(
+                                        child: Text(
+                                          task.ngoName ?? context.tr('role_ngo'),
+                                          style: const TextStyle(fontSize: 12, color: AppTheme.primaryGreen, fontWeight: FontWeight.w600),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.straighten, size: 15, color: AppTheme.secondaryTerracotta),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '${(task.currentDistanceKm ?? 3.2).toStringAsFixed(1)} km',
+                                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      const Icon(Icons.timer_outlined, size: 15, color: AppTheme.secondaryTerracotta),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '~${(task.currentEtaMinutes ?? 20).toInt()} min ${context.tr('estimated_mission_time')}',
+                                        style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: AppTheme.space16),
+
+                            // Actions: PASS (Secondary) & ACCEPT RESCUE (Primary)
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: OutlinedButton(
+                                    onPressed: () => _handlePassRescue(task.id),
+                                    style: OutlinedButton.styleFrom(
+                                      minimumSize: const Size(0, 44),
+                                      foregroundColor: AppTheme.textSecondary,
+                                      side: const BorderSide(color: AppTheme.border),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                                    ),
+                                    child: Text(
+                                      context.tr('pass'),
+                                      style: const TextStyle(fontWeight: FontWeight.w600),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: AppTheme.space12),
+                                Expanded(
+                                  flex: 2,
+                                  child: ElevatedButton(
+                                    onPressed: () => _handleAcceptRescue(task.id),
+                                    style: ElevatedButton.styleFrom(
+                                      minimumSize: const Size(0, 44),
+                                      backgroundColor: AppTheme.primaryGreen,
+                                      foregroundColor: Colors.white,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                                    ),
+                                    child: Text(
+                                      context.tr('accept_rescue'),
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
                                     ),
                                   ),
                                 ),
                               ],
-                            ),
-                            const SizedBox(height: 8),
-                            Text(task.pickupAddress, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
-                            Text(task.ngoName ?? context.tr('role_ngo'), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis),
-                            const SizedBox(height: AppTheme.space12),
-                            SizedBox(
-                              width: double.infinity,
-                              child: ElevatedButton(
-                                onPressed: () => context.push('/volunteer/request/${task.id}'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: fitsCapacity ? AppTheme.primaryGreen : Colors.grey.shade700,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(vertical: 10),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
-                                ),
-                                child: Text(context.tr('accept_pickup'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                              ),
                             ),
                           ],
                         ),

@@ -38,6 +38,8 @@ class DonationCard extends StatelessWidget {
   final Widget? trailingAction;
   final VoidCallback? onAccept;
   final VoidCallback? onReject;
+  final String? acceptLabel;
+  final String? rejectLabel;
   final bool isLoading;
   final bool isDisabled;
 
@@ -67,6 +69,8 @@ class DonationCard extends StatelessWidget {
     this.trailingAction,
     this.onAccept,
     this.onReject,
+    this.acceptLabel,
+    this.rejectLabel,
     this.isLoading = false,
     this.isDisabled = false,
   });
@@ -421,7 +425,10 @@ class DonationCard extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(vertical: AppTheme.space12),
                             ),
                             child: Text(
-                              context.tr('reject_donation'),
+                              rejectLabel ??
+                                  ((currentRole == 'ngo' || currentRole == 'volunteer')
+                                      ? context.tr('pass')
+                                      : context.tr('reject_donation')),
                               style: const TextStyle(fontWeight: FontWeight.w600),
                             ),
                           ),
@@ -443,9 +450,12 @@ class DonationCard extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(vertical: AppTheme.space12),
                             ),
                             child: Text(
-                              rescueWindowInfo.isWindowEnded
-                                  ? context.trUrgency('window_ended')
-                                  : context.tr('accept_donation'),
+                              acceptLabel ??
+                                  (rescueWindowInfo.isWindowEnded
+                                      ? context.trUrgency('window_ended')
+                                      : ((currentRole == 'ngo' || currentRole == 'volunteer')
+                                          ? context.tr('accept_rescue')
+                                          : context.tr('accept_donation'))),
                               style: const TextStyle(fontWeight: FontWeight.bold),
                             ),
                           ),

@@ -6,6 +6,11 @@ class Settings:
 
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./smart_food.db")
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "20"))
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "30"))
+    DB_POOL_TIMEOUT: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+    DB_POOL_RECYCLE: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
+    DB_ECHO: bool = os.getenv("DB_ECHO", "false").lower() in ("true", "1")
 
     # Security — Short-lived access tokens + 7-day refresh tokens
     JWT_SECRET: str = os.getenv("JWT_SECRET", "super-secret-jwt-key-food-donation-2026-sfd")

@@ -178,6 +178,14 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setSessionFromExternal(String accessToken, Map<String, dynamic> userData) async {
+    await _storage.saveToken(accessToken);
+    _currentUser = UserModel.fromJson(userData);
+    _status = AuthStatus.authenticated;
+    await _storage.saveUserData(jsonEncode(_currentUser!.toJson()));
+    notifyListeners();
+  }
+
   void setCurrentUserForTesting(UserModel user) {
     _currentUser = user;
     _status = AuthStatus.authenticated;

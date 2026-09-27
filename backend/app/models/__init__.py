@@ -7,7 +7,8 @@ from app.models.models import (
     Notification,
     Reward,
     RescueFeedback,
-    RescueIssueReport
+    RescueIssueReport,
+    RescueClaimToken
 )
 
 __all__ = [
@@ -19,5 +20,6 @@ __all__ = [
     "Notification",
     "Reward",
     "RescueFeedback",
-    "RescueIssueReport"
+    "RescueIssueReport",
+    "RescueClaimToken"
 ]

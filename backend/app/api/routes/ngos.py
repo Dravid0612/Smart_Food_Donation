@@ -1,11 +1,15 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from app.db.session import get_db
-from app.models.models import NGO, User
-from app.schemas.schemas import NGOResponse, NGOUpdate, NGOOperatingHoursUpdate, NGODemandUpdate
+from app.models.models import NGO, User, FoodDonation, MatchOffer
+from app.schemas.schemas import (
+    NGOResponse, NGOUpdate, NGOOperatingHoursUpdate, NGODemandUpdate,
+    MatchOfferResponse, DonationResponse
+)
 from app.core.dependencies import get_current_user, require_role
+from app.services.urgency_service import calculate_urgency
 
 router = APIRouter(prefix="/ngos", tags=["NGOs"])
 
@@ -20,6 +24,46 @@ def get_my_ngo(db: Session = Depends(get_db), current_user: User = Depends(requi
     if not ngo:
         raise HTTPException(status_code=404, detail="NGO profile not found for current user.")
     return ngo
+
+@router.get("/me/offers", response_model=List[MatchOfferResponse])
+def get_my_ngo_offers(
+    status_filter: Optional[str] = Query(None, description="Optional status filter ('offered', 'accepted', 'cancelled')"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ngo", "admin"]))
+):
+    """Returns rescue match offers dispatched to this authenticated NGO."""
+    query = db.query(MatchOffer).filter(
+        MatchOffer.candidate_id == current_user.id,
+        MatchOffer.candidate_type == "ngo"
+    )
+    if status_filter:
+        query = query.filter(MatchOffer.status == status_filter)
+    return query.order_by(MatchOffer.offered_at.desc()).all()
+
+@router.get("/me/self-pickups", response_model=List[DonationResponse])
+def get_my_ngo_self_pickups(
+    status_filter: Optional[str] = Query(None, description="Filter by status (e.g. accepted, collected)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["ngo", "admin"]))
+):
+    """Returns donations assigned to this NGO for direct self-pickup."""
+    ngo = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+    if not ngo and current_user.role != "admin":
+        raise HTTPException(status_code=404, detail="NGO profile not found for current user.")
+    
+    query = db.query(FoodDonation).filter(FoodDonation.pickup_mode == "self_pickup")
+    if current_user.role == "ngo" and ngo:
+        query = query.filter(FoodDonation.assigned_ngo_id == ngo.id)
+    if status_filter:
+        query = query.filter(FoodDonation.status == status_filter)
+    
+    donations = query.order_by(FoodDonation.created_at.desc()).all()
+    results = []
+    for d in donations:
+        item = DonationResponse.model_validate(d)
+        item.urgency_level = calculate_urgency(d.preparation_time, d.expiry_time)
+        results.append(item)
+    return results
 
 @router.get("/{ngo_id}", response_model=NGOResponse)
 def get_ngo_by_id(ngo_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):

@@ -9,10 +9,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.core.config import settings
 from app.db.base import Base
-from app.models import donation, donation_history, ngo, user
+import app.models.models  # Ensures all 20 models and tables are registered in Base.metadata
 
 config = context.config
-config.set_main_option('sqlalchemy.url', settings.DATABASE_URL)
+raw_db_url = settings.DATABASE_URL
+if raw_db_url.startswith("postgres://"):
+    raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
+config.set_main_option('sqlalchemy.url', raw_db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
