@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import '../core/api/api_client.dart';
 import '../core/storage/secure_storage.dart';
 import '../models/user_model.dart';
+import '../services/notification_service.dart';
 
 enum AuthStatus {
   unauthenticated,
@@ -97,6 +98,15 @@ class AuthProvider extends ChangeNotifier {
       _status = AuthStatus.authenticated;
       await _storage.saveUserData(jsonEncode(_currentUser!.toJson()));
 
+      // Register FCM device token with backend if available
+      try {
+        final notifService = NotificationService(_apiClient);
+        final fcmToken = await notifService.getDeviceToken();
+        if (fcmToken != null && fcmToken.isNotEmpty) {
+          await notifService.registerFcmToken(fcmToken);
+        }
+      } catch (_) {}
+
       _isLoading = false;
       notifyListeners();
       return true;
@@ -127,6 +137,9 @@ class AuthProvider extends ChangeNotifier {
     int? capacity,
     String? vehicleType,
     int? carryingCapacity,
+    String? adminSecret,
+    String? operatingHours,
+    String? demandRequirements,
   }) async {
     _isLoading = true;
     _status = AuthStatus.authenticating;
@@ -145,6 +158,9 @@ class AuthProvider extends ChangeNotifier {
         'capacity': capacity ?? 100,
         'vehicle_type': vehicleType ?? 'bike',
         'carrying_capacity': carryingCapacity ?? 50,
+        if (adminSecret != null) 'admin_secret': adminSecret.trim(),
+        if (operatingHours != null) 'operating_hours': operatingHours,
+        if (demandRequirements != null) 'demand_requirements': demandRequirements,
       });
 
       // Auto login after successful registration
@@ -170,6 +186,11 @@ class AuthProvider extends ChangeNotifier {
       await _apiClient.dio.post('/auth/logout');
     } catch (_) {
       // Continue client-side teardown even if offline
+    }
+    try {
+      await NotificationService(_apiClient).unregisterFcmToken();
+    } catch (_) {
+      // Non-critical token cleanup
     }
     _currentUser = null;
     _status = AuthStatus.unauthenticated;

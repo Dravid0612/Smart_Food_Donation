@@ -160,6 +160,10 @@ def p4_environment(db_session: Session):
         db_session.add(vol)
         db_session.commit()
         db_session.refresh(vol)
+    else:
+        # Clear existing active assignments for test isolation
+        db_session.query(VolunteerAssignment).filter(VolunteerAssignment.volunteer_id == vol.id).delete()
+        db_session.commit()
 
     return {
         "donor": donor,

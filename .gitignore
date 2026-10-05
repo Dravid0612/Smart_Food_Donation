@@ -15,6 +15,10 @@
 *.crt
 *.pfx
 *.p12
+*service_account*.json
+*credentials*.json
+firebase*.json
+google-services.json
 
 # 2. Python & Virtual Environments
 __pycache__/

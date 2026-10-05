@@ -41,6 +41,7 @@ logger = logging.getLogger("smart_food_rescue.otp")
 # {key: [timestamps]}  — key = f"pickup_regen:{donation_id}" or f"phone_verify:{user_id}"
 _OTP_REGEN_ATTEMPTS: dict = {}
 _PHONE_VERIFY_ATTEMPTS: dict = {}
+_OTP_VERIFY_ATTEMPTS: dict = {}
 
 
 def _hash_otp(otp: str, salt: Optional[str] = None) -> str:
@@ -423,18 +424,37 @@ def verify_pickup_otp(
             detail="This pickup code has expired. Ask the donor to generate a new code.",
         )
 
-    # 6. Hash submitted OTP & timing-safe compare
-    attempt_hash = _hash_otp(otp_attempt.strip())
-    if not secrets.compare_digest(attempt_hash, otp_record.otp_hash):
+    # 5b. Verification attempt rate limiting & Lockout guard (Section 16: Lockout after repeated failures)
+    verify_key = f"otp_verify:{donation.id}"
+    now_ts = time.time()
+    recent_failures = [ts for ts in _OTP_VERIFY_ATTEMPTS.get(verify_key, []) if now_ts - ts < 15 * 60]
+    _OTP_VERIFY_ATTEMPTS[verify_key] = recent_failures
+    if len(recent_failures) >= 5:
         _log_otp_audit(
-            db, action="otp_wrong",
+            db, action="otp_lockout_triggered",
             user_id=verifier.id, donation_id=donation.id,
-            details="Wrong OTP entered",
+            details="5 failed OTP attempts. Verification locked for 15 minutes.",
             status_code="failed",
         )
         raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed pickup code attempts. Verification is locked for 15 minutes for security."
+        )
+
+    # 6. Hash submitted OTP & timing-safe compare
+    attempt_hash = _hash_otp(otp_attempt.strip())
+    if not secrets.compare_digest(attempt_hash, otp_record.otp_hash):
+        _OTP_VERIFY_ATTEMPTS[verify_key] = recent_failures + [now_ts]
+        _log_otp_audit(
+            db, action="otp_wrong",
+            user_id=verifier.id, donation_id=donation.id,
+            details=f"Wrong OTP entered (attempt {len(recent_failures) + 1}/5)",
+            status_code="failed",
+        )
+        remaining_tries = max(0, 5 - (len(recent_failures) + 1))
+        raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect pickup code. Please ask the donor to show the code again.",
+            detail=f"Incorrect pickup code. {remaining_tries} attempts remaining before lockout. Please ask the donor to show the code again.",
         )
 
     # 7. Role Isolation
@@ -499,6 +519,7 @@ def verify_pickup_otp(
     otp_record.is_active = False
     donation.otp_used_at = now
     donation.verification_otp = None  # Clear plaintext OTP from donation model
+    _OTP_VERIFY_ATTEMPTS.pop(verify_key, None)
     db.commit()
 
     # 10. Audit logging & History creation

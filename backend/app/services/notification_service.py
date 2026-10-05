@@ -16,9 +16,12 @@ SECURITY:
   - Urgent rescue alerts bypass quiet-hour preferences (per-spec).
 """
 
+import os
 import json
 import logging
 import asyncio
+import threading
+import time
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Set
 
@@ -28,6 +31,27 @@ from app.models.models import Notification, NotificationPreference, User, FoodDo
 from app.core.config import settings
 
 logger = logging.getLogger("smart_food_rescue.notifications")
+
+
+_fcm_telemetry: Dict[str, int] = {
+    "fcm_send_attempts": 0,
+    "fcm_duplicate_prevented": 0,
+    "fcm_failures": 0,
+}
+_fcm_lock = threading.Lock()
+
+
+def get_fcm_telemetry() -> Dict[str, int]:
+    """Returns a snapshot of FCM push usage counters."""
+    with _fcm_lock:
+        return dict(_fcm_telemetry)
+
+
+def reset_fcm_telemetry():
+    """Resets FCM push usage counters."""
+    with _fcm_lock:
+        for k in _fcm_telemetry:
+            _fcm_telemetry[k] = 0
 
 
 def _utcnow() -> datetime:
@@ -281,72 +305,282 @@ def _build_deep_link_data(event_type: str, donation_id: Optional[int]) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FCM Push Abstraction
+# FCM Push Abstraction (HTTP v1 / Firebase Admin SDK)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _send_fcm_push(notification: Notification, db: Session) -> bool:
+def _get_fcm_access_token() -> Optional[str]:
     """
-    Sends a FCM push notification. Uses mock adapter if FCM not configured.
-    SECURITY: Payload never contains OTP, JWT, or private data.
+    Obtains an OAuth 2.0 access token for FCM HTTP v1 messaging.
+    Loads service account credentials from GOOGLE_APPLICATION_CREDENTIALS
+    or FIREBASE_CREDENTIALS_PATH or ADC.
+    Access tokens and private keys are NEVER logged.
     """
-    if not settings.FCM_SERVER_KEY or not settings.FCM_PROJECT_ID:
-        # Mock adapter — log only
-        logger.info(
-            f"[MockFCM] Push would be sent: user_id={notification.user_id} "
-            f"event_type={notification.event_type} "
-            f"title='{notification.title}' "
-            f"deep_link={notification.deep_link_data} "
-            f"(FCM_SERVER_KEY not configured — mock adapter)"
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
+        import google.auth
+
+        scopes = ["https://www.googleapis.com/auth/firebase.messaging"]
+        cred_path = getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "") or getattr(settings, "FIREBASE_CREDENTIALS_PATH", "")
+
+        credentials = None
+        if cred_path and os.path.exists(cred_path):
+            credentials = service_account.Credentials.from_service_account_file(cred_path, scopes=scopes)
+        elif os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            credentials, _ = google.auth.default(scopes=scopes)
+
+        if credentials:
+            request = Request()
+            credentials.refresh(request)
+            return credentials.token
+    except Exception as e:
+        logger.warning(f"[FCM] Failed to acquire OAuth 2.0 access token: {type(e).__name__}")
+    return None
+
+
+def _send_via_firebase_admin(notification: Notification, fcm_token: str, safe_data: dict, db: Session) -> Optional[bool]:
+    """
+    Attempts to send via Firebase Admin SDK if installed and initialized.
+    Returns boolean if handled, or None if Firebase Admin SDK is not available.
+    """
+    try:
+        import firebase_admin
+        from firebase_admin import messaging
+
+        if not firebase_admin._apps:
+            cred_path = getattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "") or getattr(settings, "FIREBASE_CREDENTIALS_PATH", "")
+            if cred_path and os.path.exists(cred_path):
+                from firebase_admin import credentials
+                cred = credentials.Certificate(cred_path)
+                firebase_admin.initialize_app(cred, {"projectId": settings.FCM_PROJECT_ID} if settings.FCM_PROJECT_ID else None)
+            elif settings.FCM_PROJECT_ID:
+                firebase_admin.initialize_app(options={"projectId": settings.FCM_PROJECT_ID})
+            else:
+                return None
+
+        msg = messaging.Message(
+            token=fcm_token,
+            notification=messaging.Notification(
+                title=notification.title,
+                body=notification.message,
+            ),
+            data=safe_data,
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="smart_food_rescue_high_importance",
+                    sound="default",
+                ),
+            ),
         )
+        response = messaging.send(msg)
         notification.is_sent = True
         notification.sent_at = _utcnow()
         db.commit()
+        logger.info(f"[FCM Admin SDK] Push sent successfully for user_id={notification.user_id}")
+        return True
+    except ImportError:
+        return None
+    except Exception as e:
+        err_str = str(e).lower()
+        if any(term in err_str for term in ["unregistered", "registration-token-not-registered", "invalid-argument", "not_found"]):
+            logger.warning(f"[FCM Admin SDK] Token invalid/unregistered for user_id={notification.user_id}. Clearing token.")
+            prefs = db.query(NotificationPreference).filter_by(user_id=notification.user_id).first()
+            if prefs:
+                prefs.fcm_token = None
+                prefs.fcm_token_updated_at = _utcnow()
+                db.commit()
+            return False
+        logger.error(f"[FCM Admin SDK] Push dispatch failed: {type(e).__name__}")
+        return False
+
+
+def _send_fcm_http_v1(
+    notification: Notification,
+    fcm_token: str,
+    safe_data: dict,
+    db: Session
+) -> bool:
+    """
+    Sends push notification via current FCM HTTP v1 REST API:
+    POST https://fcm.googleapis.com/v1/projects/{FCM_PROJECT_ID}/messages:send
+    Using OAuth 2.0 Bearer authorization.
+    Never logs access tokens or secrets.
+    Clears unregistered tokens on 404 / UNREGISTERED.
+    """
+    import httpx
+    project_id = settings.FCM_PROJECT_ID
+    if not project_id:
+        logger.warning("[FCM HTTP v1] FCM_PROJECT_ID not configured.")
+        return False
+
+    access_token = _get_fcm_access_token()
+    if not access_token:
+        logger.warning("[FCM HTTP v1] Could not acquire OAuth 2.0 access token for FCM dispatch.")
+        return False
+
+    url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; UTF-8",
+    }
+
+    payload = {
+        "message": {
+            "token": fcm_token,
+            "notification": {
+                "title": notification.title,
+                "body": notification.message,
+            },
+            "data": safe_data,
+            "android": {
+                "priority": "HIGH",
+                "notification": {
+                    "channel_id": "smart_food_rescue_high_importance",
+                    "sound": "default",
+                }
+            },
+            "apns": {
+                "payload": {
+                    "aps": {
+                        "sound": "default",
+                        "badge": 1,
+                    }
+                }
+            }
+        }
+    }
+
+    with _fcm_lock:
+        _fcm_telemetry["fcm_send_attempts"] += 1
+
+    timeout_sec = 5.0
+    max_retries = int(getattr(settings, "FCM_MAX_TRANSIENT_RETRIES", 1))
+
+    resp = None
+    for attempt in range(max_retries + 1):
+        try:
+            with httpx.Client(timeout=timeout_sec) as client:
+                resp = client.post(url, json=payload, headers=headers)
+
+            if resp.status_code == 200:
+                notification.is_sent = True
+                notification.sent_at = _utcnow()
+                db.commit()
+                logger.info(f"[FCM HTTP v1] Push sent successfully for user_id={notification.user_id}")
+                return True
+
+            # Transient errors: 429, 500, 502, 503 -> retry with backoff
+            if resp.status_code in [429, 500, 502, 503] and attempt < max_retries:
+                time.sleep(1.0)
+                continue
+
+            break  # Permanent or unrecoverable error
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            if attempt < max_retries:
+                time.sleep(1.0)
+                continue
+            with _fcm_lock:
+                _fcm_telemetry["fcm_failures"] += 1
+            logger.error(f"[FCM HTTP v1] Push network/timeout error: {e}")
+            return False
+
+    with _fcm_lock:
+        _fcm_telemetry["fcm_failures"] += 1
+
+    # Handle unregistered / invalid tokens
+    is_unregistered = False
+    try:
+        err_data = resp.json().get("error", {})
+        err_status = err_data.get("status", "")
+        err_msg = err_data.get("message", "")
+        err_details = err_data.get("details", [])
+        for d in err_details:
+            if d.get("errorCode") in ["UNREGISTERED", "INVALID_ARGUMENT"]:
+                is_unregistered = True
+                break
+        if err_status in ["NOT_FOUND", "INVALID_ARGUMENT"] or "not a valid FCM registration token" in err_msg or "UNREGISTERED" in err_msg:
+            is_unregistered = True
+    except Exception:
+        if resp and resp.status_code in [400, 404]:
+            is_unregistered = True
+
+    if is_unregistered:
+        logger.warning(f"[FCM HTTP v1] Stale or unregistered token detected for user_id={notification.user_id}. Clearing token.")
+        prefs = db.query(NotificationPreference).filter_by(user_id=notification.user_id).first()
+        if prefs:
+            prefs.fcm_token = None
+            prefs.fcm_token_updated_at = _utcnow()
+            db.commit()
+        return False
+
+    status_code = resp.status_code if resp else "None"
+    logger.error(f"[FCM HTTP v1] Push request failed with HTTP {status_code}")
+    return False
+
+
+def _send_fcm_push(notification: Notification, db: Session) -> bool:
+    """
+    Sends an FCM push notification using current FCM HTTP v1 or Firebase Admin SDK.
+    Uses mock adapter if FCM HTTP v1 is not configured.
+    SECURITY:
+      - Primary transport is FCM HTTP v1 / Firebase Admin SDK with OAuth 2.0 authorization.
+      - Legacy FCM server keys are NOT used for primary push delivery.
+      - Access tokens, service account keys, and private credentials are NEVER logged.
+      - Payload NEVER contains OTP, password, JWT, or private coordinates.
+      - Automatically clears stale/unregistered device tokens on FCM failure.
+      - FCM failures are isolated and never crash the core transaction.
+    """
+    has_credentials = bool(
+        settings.GOOGLE_APPLICATION_CREDENTIALS or 
+        getattr(settings, "FIREBASE_CREDENTIALS_PATH", "") or 
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    )
+    if not settings.FCM_PROJECT_ID or not has_credentials:
+        # Mock/degraded adapter — log only
+        logger.info(
+            f"[MockFCM] Push recorded: user_id={notification.user_id} "
+            f"event_type={notification.event_type} "
+            f"title='{notification.title}' "
+            f"deep_link={notification.deep_link_data} "
+            f"(FCM HTTP v1 credentials not configured — mock adapter)"
+        )
+        notification.is_sent = True
+        notification.sent_at = _utcnow()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
         return True
 
-    # Production FCM (requires FCM_SERVER_KEY)
     try:
-        import urllib.request
-        import urllib.error
-
         # Get FCM token for this user
         prefs = db.query(NotificationPreference).filter(
             NotificationPreference.user_id == notification.user_id
         ).first()
         if not prefs or not prefs.fcm_token:
-            logger.info(f"[FCM] No FCM token for user_id={notification.user_id} — skipping push")
+            logger.info(f"[FCM] No registered FCM token for user_id={notification.user_id} — skipping push")
             return False
 
-        payload = json.dumps({
-            "to": prefs.fcm_token,
-            "notification": {
-                "title": notification.title,
-                "body": notification.message,
-                # NEVER add OTP here
-            },
-            "data": json.loads(notification.deep_link_data or "{}"),
-            "priority": "high",
-        }).encode()
+        # Parse deep link data and strictly sanitize to ensure NO OTP, tokens, or coordinates leak
+        raw_data = json.loads(notification.deep_link_data or "{}")
+        sensitive_patterns = ["otp", "pass", "token", "secret", "auth", "key", "cred", "pin", "latitude", "longitude", "coord"]
+        safe_data = {
+            k: str(v) for k, v in raw_data.items()
+            if not any(pat in k.lower() for pat in sensitive_patterns)
+        }
 
-        req = urllib.request.Request(
-            "https://fcm.googleapis.com/fcm/send",
-            data=payload,
-            headers={
-                "Authorization": f"key={settings.FCM_SERVER_KEY}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            result = json.loads(resp.read())
-            success = result.get("success", 0) > 0
-            notification.is_sent = success
-            notification.sent_at = _utcnow() if success else None
-            db.commit()
-            logger.info(f"[FCM] Push sent: user_id={notification.user_id} success={success}")
-            return success
+        # First try Firebase Admin SDK if available
+        admin_result = _send_via_firebase_admin(notification, prefs.fcm_token, safe_data, db)
+        if admin_result is not None:
+            return admin_result
+
+        # Otherwise use FCM HTTP v1 REST API
+        return _send_fcm_http_v1(notification, prefs.fcm_token, safe_data, db)
 
     except Exception as e:
-        logger.error(f"[FCM] Push failed for user_id={notification.user_id}: {e}")
+        logger.error(f"[FCM] Push dispatch error for user_id={notification.user_id}: {type(e).__name__}")
+        # Failure isolation: never bubble push errors to caller
         return False
 
 
@@ -444,6 +678,8 @@ def create_event_notification(
         .first()
     )
     if duplicate:
+        with _fcm_lock:
+            _fcm_telemetry["fcm_duplicate_prevented"] += 1
         logger.info(f"[Notification] Deduplicated event_type={event_type} user_id={user_id} dedup_key={dedup_key}")
         return None
 

@@ -21,7 +21,7 @@ from app.schemas.schemas import (
     DonationCancelRequest, RecurringDonationCreate, RecurringDonationResponse,
     RatingCreate, RatingResponse, CertificateResponse, CSRImpactSummaryResponse,
     RescueChecklistResponse, FoodAnalysisResponse, FoodAnalysisCreate, DonationDistributionRequest,
-    DonationDistributionResponse, DonationMetricsSummary, FoodRescueWindowResponse,
+    DonationReceiveRequest, DonationDistributionResponse, DonationMetricsSummary, FoodRescueWindowResponse,
     RescueFeasibilityResponse, DonorImpactSummaryResponse, DonorMonthlyImpactItem,
     KitchenProfileCreate, KitchenProfileResponse, RepeatDonationPrefillResponse,
     DonorCustomFoodProfileCreate, DonorCustomFoodProfileResponse, CustomFoodAggregatedAdminResponse,
@@ -442,10 +442,19 @@ def get_donations(
             (FoodDonation.status == "pending") | (FoodDonation.assigned_ngo_id == ngo_id)
         )
     elif current_user.role == "volunteer":
-        query = query.filter(
-            (FoodDonation.assigned_volunteer_id == current_user.id) |
-            (FoodDonation.status == "accepted")
-        )
+        if not current_user.is_active:
+            # When unavailable: do not offer new pickup tasks, return only assigned tasks
+            query = query.filter(FoodDonation.assigned_volunteer_id == current_user.id)
+        else:
+            # When available: offer assigned tasks or unassigned feasible courier pickup tasks
+            query = query.filter(
+                (FoodDonation.assigned_volunteer_id == current_user.id) |
+                (
+                    (FoodDonation.status == "accepted") &
+                    (FoodDonation.pickup_mode != "self_pickup") &
+                    (FoodDonation.assigned_volunteer_id.is_(None))
+                )
+            )
 
     if status_filter:
         query = query.filter(FoodDonation.status == status_filter)
@@ -464,11 +473,47 @@ def get_donations(
                 d.failure_reason = "Donation expired: pickup deadline elapsed with no match"
                 db.add(d)
 
+        # For volunteers viewing unassigned tasks: screen ONLY feasible tasks before rescue window ends
+        if current_user.role == "volunteer" and d.assigned_volunteer_id != current_user.id:
+            prep_time = d.preparation_time or d.created_at
+            r_eval = evaluate_food_rescue_window(
+                food_type=d.food_type or d.food_name,
+                food_category=d.food_category,
+                prepared_at=prep_time,
+                storage_method=d.storage_method or "Room Temperature",
+                storage_continuous=d.storage_continuous if d.storage_continuous is not None else True,
+                packaging_status=d.packaging_condition or "Covered",
+                previously_served=d.previously_served or "No",
+                exposure_status=d.exposure_status or "No",
+                handling_status=d.handling_status or "No",
+                visual_condition_in=d.ai_visual_condition or "GOOD",
+                visible_spoilage_in=d.ai_visible_spoilage,
+                ai_confidence_in=d.ai_confidence_score or 0.88
+            )
+            f_eval = calculate_rescue_feasibility(
+                remaining_window_minutes=r_eval["remaining_minutes"]
+            )
+            # Master Prompt Section 5: Volunteer must NEVER receive tasks that cannot fit the remaining rescue window
+            if not f_eval["is_feasible"] or r_eval["remaining_minutes"] <= 0:
+                continue
+
         item = DonationResponse.model_validate(d)
         item.urgency_level = calculate_urgency(d.preparation_time, d.expiry_time)
 
-        # Pre-acceptance location privacy: mask exact address & round coords for unaccepted donations
-        if d.status == "pending" and current_user.role in ["ngo", "volunteer"] and d.donor_id != current_user.id:
+        # Attach real volunteer assignment ID if assigned
+        if current_user.role == "volunteer":
+            va = db.query(VolunteerAssignment).filter(
+                VolunteerAssignment.donation_id == d.id,
+                VolunteerAssignment.volunteer_id == current_user.id,
+                VolunteerAssignment.status.in_(["assigned", "accepted", "en_route", "arrived", "collected", "in_transit"])
+            ).order_by(VolunteerAssignment.id.desc()).first()
+            if va:
+                item.assignment_id = va.id
+
+        # Pre-acceptance location privacy: mask exact address & round coords for unassigned tasks
+        is_my_assigned_task = (d.assigned_volunteer_id == current_user.id)
+        if (d.status == "pending" and current_user.role in ["ngo", "volunteer"] and d.donor_id != current_user.id) or \
+           (current_user.role == "volunteer" and not is_my_assigned_task):
             addr_parts = (d.pickup_address or "").split(",")
             coarse_area = addr_parts[-2].strip() if len(addr_parts) >= 2 else (addr_parts[0].strip() if addr_parts else "Neighborhood Area")
             item.pickup_address = f"{coarse_area} (Exact address revealed upon acceptance)"
@@ -522,10 +567,14 @@ def get_donation_detail(donation_id: int, db: Session = Depends(get_db), current
     detail.urgency_level = calculate_urgency(donation.preparation_time, donation.expiry_time)
     detail.ngo_name = ngo.organization_name if ngo else None
 
-    # Pre-acceptance location privacy for unassigned NGO detail view
-    if donation.status == "pending" and current_user.role == "ngo":
-        ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
-        if not (ngo_profile and donation.assigned_ngo_id == ngo_profile.id):
+    # Pre-acceptance location privacy for unassigned NGO or unassigned volunteer detail view
+    if (donation.status == "pending" and current_user.role == "ngo") or (current_user.role == "volunteer" and not is_assigned_vol):
+        reveal = False
+        if current_user.role == "ngo":
+            ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
+            if ngo_profile and donation.assigned_ngo_id == ngo_profile.id:
+                reveal = True
+        if not reveal:
             addr_parts = (donation.pickup_address or "").split(",")
             coarse_area = addr_parts[-2].strip() if len(addr_parts) >= 2 else (addr_parts[0].strip() if addr_parts else "Neighborhood Area")
             detail.pickup_address = f"{coarse_area} (Exact address revealed upon acceptance)"
@@ -551,6 +600,14 @@ def get_donation_detail(donation_id: int, db: Session = Depends(get_db), current
         detail.qr_code_token = None
         detail.volunteer_name = volunteer.name if volunteer else None
         detail.volunteer_phone = None
+        # Populate assignment_id
+        va = db.query(VolunteerAssignment).filter(
+            VolunteerAssignment.donation_id == donation.id,
+            VolunteerAssignment.volunteer_id == current_user.id,
+            VolunteerAssignment.status.in_(["assigned", "accepted", "en_route", "arrived", "collected", "in_transit"])
+        ).order_by(VolunteerAssignment.id.desc()).first()
+        if va:
+            detail.assignment_id = va.id
     elif current_user.role == "ngo":
         # NGO sees donor name after acceptance, no phone before
         ngo_profile = db.query(NGO).filter(NGO.user_id == current_user.id).first()
@@ -1268,6 +1325,77 @@ def request_volunteer_for_donation(
     resp.urgency_level = calculate_urgency(donation.preparation_time, donation.expiry_time)
     return resp
 
+@router.post("/{donation_id}/self-dropoff", response_model=DonationResponse)
+def donor_self_dropoff_switch(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Allows a donor (or admin) to opt for direct self drop-off to the matched shelter / NGO facility.
+    Cancels uncollected volunteer assignments gracefully and sets pickup_mode to 'self_pickup'.
+    """
+    donation = db.query(FoodDonation).filter(FoodDonation.id == donation_id).with_for_update().first()
+    if not donation:
+        raise HTTPException(status_code=404, detail="Donation not found.")
+
+    if current_user.role != "admin" and donation.donor_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Only the donor who posted this donation can choose self drop-off.")
+
+    if donation.status in ["collected", "in_transit", "delivered", "completed", "cancelled", "expired"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot switch to self drop-off for donation in '{donation.status}' status."
+        )
+
+    old_mode = donation.pickup_mode
+    donation.pickup_mode = "self_pickup"
+
+    # If any volunteer was in 'assigned' or 'accepted' status (not yet picked up), cancel assignment
+    assignments = db.query(VolunteerAssignment).filter(
+        VolunteerAssignment.donation_id == donation.id,
+        VolunteerAssignment.status.in_(["assigned", "accepted"])
+    ).all()
+    for a in assignments:
+        transition_assignment_status(
+            db, a, "cancelled",
+            changed_by_user_id=current_user.id,
+            caller_role=current_user.role,
+            remarks="Donor chose direct self drop-off."
+        )
+        a.failure_reason = "Donor opted for direct self drop-off to NGO facility."
+
+    donation.assigned_volunteer_id = None
+
+    log_status_change(
+        db, donation.id, donation.status, donation.status, current_user.id,
+        f"Donor switched pickup mode from '{old_mode}' to direct self drop-off."
+    )
+
+    if donation.assigned_ngo_id:
+        create_notification(
+            db, user_id=donation.assigned_ngo_id,
+            title="Donor Delivering Directly",
+            message=f"Donor for '{donation.food_name}' has chosen direct self drop-off to your facility.",
+            type="info", related_donation_id=donation.id
+        )
+
+    log_audit_event(
+        db, action="self_dropoff_selected_by_donor",
+        user_id=current_user.id,
+        resource_type="donation",
+        resource_id=donation.id,
+        status_code="success",
+        details=f"Donation {donation.id} switched to self_pickup by donor."
+    )
+
+    db.commit()
+    db.refresh(donation)
+
+    resp = DonationResponse.model_validate(donation)
+    resp.urgency_level = calculate_urgency(donation.preparation_time, donation.expiry_time)
+    return resp
+
 @router.post("/{donation_id}/cancel", response_model=DonationResponse)
 def cancel_donation(
     donation_id: int,
@@ -1406,8 +1534,10 @@ def collect_food(
     return resp
 
 @router.post("/{donation_id}/deliver", response_model=DonationResponse)
+@router.post("/{donation_id}/receive", response_model=DonationResponse)
 def deliver_food(
     donation_id: int,
+    payload: Optional[DonationReceiveRequest] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["volunteer", "ngo", "admin"]))
 ):
@@ -1423,12 +1553,24 @@ def deliver_food(
         if not ngo_profile or donation.assigned_ngo_id != ngo_profile.id:
             raise HTTPException(status_code=403, detail="You are not the assigned NGO for this donation.")
 
+    # Record received quantity and condition if provided
+    received_qty = donation.quantity
+    if payload and payload.received_quantity is not None:
+        received_qty = payload.received_quantity
+        donation.received_quantity = received_qty
+    elif donation.received_quantity is None:
+        donation.received_quantity = donation.quantity
+
+    if payload and payload.remarks:
+        donation.distribution_remarks = payload.remarks
+
     # State machine enforcement — transition to 'delivered' (NGO records distribution to reach 'completed')
+    cond_str = f" Condition: {payload.condition}." if (payload and payload.condition) else ""
     transition_donation_status(
         db, donation, "delivered",
         changed_by_user_id=current_user.id,
         caller_role=current_user.role,
-        remarks="Food delivered to NGO facility — awaiting beneficiary distribution recording"
+        remarks=f"Food delivered to NGO facility ({received_qty:.0f} meals recorded).{cond_str} Awaiting beneficiary distribution recording."
     )
 
     assignment = db.query(VolunteerAssignment).filter(
@@ -1948,7 +2090,7 @@ def analyze_donation(
             discoloration=analysis_res.get("discoloration"),
             packaging_integrity=analysis_res.get("packaging_integrity"),
             visual_condition=analysis_res.get("visual_condition", "GOOD"),
-            confidence=analysis_res.get("confidence", 0.88),
+            confidence=analysis_res.get("confidence") if analysis_res.get("confidence") is not None else 0.88,
             observations=obs_str,
             safety_disclaimer=analysis_res.get("safety_disclaimer", "Visual assessment only; this does not certify food safety."),
             storage_assessment=analysis_res.get("storage_assessment"),
@@ -1962,7 +2104,7 @@ def analyze_donation(
         food_analysis.discoloration = analysis_res.get("discoloration")
         food_analysis.packaging_integrity = analysis_res.get("packaging_integrity")
         food_analysis.visual_condition = analysis_res.get("visual_condition", "GOOD")
-        food_analysis.confidence = analysis_res.get("confidence", 0.88)
+        food_analysis.confidence = analysis_res.get("confidence") if analysis_res.get("confidence") is not None else 0.88
         food_analysis.observations = obs_str
         food_analysis.safety_disclaimer = analysis_res.get("safety_disclaimer", "Visual assessment only; this does not certify food safety.")
         food_analysis.storage_assessment = analysis_res.get("storage_assessment")

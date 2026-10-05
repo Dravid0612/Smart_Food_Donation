@@ -75,5 +75,39 @@ class NgoModel {
       demandRequirements: parsedDemands,
     );
   }
+
+  NgoModel copyWith({
+    int? id,
+    int? userId,
+    String? organizationName,
+    String? description,
+    String? address,
+    double? latitude,
+    double? longitude,
+    int? capacity,
+    int? currentCapacity,
+    bool? isAvailable,
+    bool? isVerified,
+    String? contactPhone,
+    Map<String, dynamic>? operatingHours,
+    Map<String, dynamic>? demandRequirements,
+  }) {
+    return NgoModel(
+      id: id ?? this.id,
+      userId: userId ?? this.userId,
+      organizationName: organizationName ?? this.organizationName,
+      description: description ?? this.description,
+      address: address ?? this.address,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      capacity: capacity ?? this.capacity,
+      currentCapacity: currentCapacity ?? this.currentCapacity,
+      isAvailable: isAvailable ?? this.isAvailable,
+      isVerified: isVerified ?? this.isVerified,
+      contactPhone: contactPhone ?? this.contactPhone,
+      operatingHours: operatingHours ?? this.operatingHours,
+      demandRequirements: demandRequirements ?? this.demandRequirements,
+    );
+  }
 }
 

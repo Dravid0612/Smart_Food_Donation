@@ -229,7 +229,36 @@ class AdminRescueDetailModel extends AdminReceivingItemModel {
     this.ngoCapacityAvailable = true,
     this.ngoCurrentCapacity,
     this.ngoMaxCapacity,
+    this.preparationTime,
+    this.aiAdvisory,
+    this.currentWave = 1,
+    this.waveName,
+    this.offersCount = 0,
+    this.feasibilityStatus = 'FEASIBLE',
+    this.otpState = 'NOT_GENERATED',
+    this.pickupMode = 'volunteer_dispatch',
+    this.blockedReason,
+    this.hasClaimToken = false,
+    this.claimToken,
+    this.mealsRescued = 0.0,
+    this.environmentalCo2Kg = 0.0,
+    this.environmentalWaterLiters = 0.0,
   });
+
+  final String? preparationTime;
+  final String? aiAdvisory;
+  final int currentWave;
+  final String? waveName;
+  final int offersCount;
+  final String feasibilityStatus;
+  final String otpState; // Strictly state string, never plaintext OTP
+  final String pickupMode;
+  final String? blockedReason;
+  final bool hasClaimToken;
+  final String? claimToken;
+  final double mealsRescued;
+  final double environmentalCo2Kg;
+  final double environmentalWaterLiters;
 
   factory AdminRescueDetailModel.fromJson(Map<String, dynamic> json) {
     var baseItem = AdminReceivingItemModel.fromJson(json);
@@ -279,6 +308,20 @@ class AdminRescueDetailModel extends AdminReceivingItemModel {
       ngoCapacityAvailable: json['ngo_capacity_available'] ?? true,
       ngoCurrentCapacity: (json['ngo_current_capacity'] as num?)?.toDouble(),
       ngoMaxCapacity: (json['ngo_max_capacity'] as num?)?.toDouble(),
+      preparationTime: json['preparation_time']?.toString(),
+      aiAdvisory: json['ai_advisory']?.toString(),
+      currentWave: json['current_wave'] ?? 1,
+      waveName: json['wave_name']?.toString(),
+      offersCount: json['offers_count'] ?? 0,
+      feasibilityStatus: json['feasibility_status'] ?? 'FEASIBLE',
+      otpState: json['otp_state'] ?? 'NOT_GENERATED',
+      pickupMode: json['pickup_mode'] ?? 'volunteer_dispatch',
+      blockedReason: json['blocked_reason']?.toString(),
+      hasClaimToken: json['has_claim_token'] ?? false,
+      claimToken: json['claim_token']?.toString(),
+      mealsRescued: (json['meals_rescued'] as num?)?.toDouble() ?? 0.0,
+      environmentalCo2Kg: (json['environmental_co2_kg'] as num?)?.toDouble() ?? 0.0,
+      environmentalWaterLiters: (json['environmental_water_liters'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
@@ -343,6 +386,105 @@ class AdminCategoryBreakdownItemModel {
       count: json['count'] ?? 0,
       totalMeals: (json['total_meals'] as num?)?.toDouble() ?? 0.0,
       percentage: (json['percentage'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+}
+
+class AdminMonthlyReportModel {
+  final String month;
+  final int donationsCount;
+  final double foodRecoveredKg;
+  final double mealsRescued;
+  final double receivedQuantity;
+  final double distributedQuantity;
+  final int completedRescues;
+  final double estimatedCo2eKg;
+  final double estimatedWaterLiters;
+  final double estimatedDisposalCostAvoidedInr;
+  final double avgRescueCompletionMinutes;
+  final bool isEstimated;
+
+  AdminMonthlyReportModel({
+    required this.month,
+    required this.donationsCount,
+    required this.foodRecoveredKg,
+    required this.mealsRescued,
+    required this.receivedQuantity,
+    required this.distributedQuantity,
+    required this.completedRescues,
+    required this.estimatedCo2eKg,
+    required this.estimatedWaterLiters,
+    required this.estimatedDisposalCostAvoidedInr,
+    required this.avgRescueCompletionMinutes,
+    this.isEstimated = true,
+  });
+
+  factory AdminMonthlyReportModel.fromJson(Map<String, dynamic> json) {
+    return AdminMonthlyReportModel(
+      month: json['month'] ?? '',
+      donationsCount: json['donations_count'] ?? 0,
+      foodRecoveredKg: (json['food_recovered_kg'] as num?)?.toDouble() ?? 0.0,
+      mealsRescued: (json['meals_rescued'] as num?)?.toDouble() ?? 0.0,
+      receivedQuantity: (json['received_quantity'] as num?)?.toDouble() ?? 0.0,
+      distributedQuantity: (json['distributed_quantity'] as num?)?.toDouble() ?? 0.0,
+      completedRescues: json['completed_rescues'] ?? 0,
+      estimatedCo2eKg: (json['estimated_co2e_kg'] as num?)?.toDouble() ?? 0.0,
+      estimatedWaterLiters: (json['estimated_water_liters'] as num?)?.toDouble() ?? 0.0,
+      estimatedDisposalCostAvoidedInr: (json['estimated_disposal_cost_avoided_inr'] as num?)?.toDouble() ?? 0.0,
+      avgRescueCompletionMinutes: (json['avg_rescue_completion_minutes'] as num?)?.toDouble() ?? 0.0,
+      isEstimated: json['is_estimated'] ?? true,
+    );
+  }
+}
+
+class AdminRepeatDonorPatternItemModel {
+  final String dayOfWeek;
+  final String foodCategory;
+  final int donationCount;
+  final double avgSurplus;
+  final double avgRescued;
+  final double avgUnrescued;
+  final List<String> topDonors;
+
+  AdminRepeatDonorPatternItemModel({
+    required this.dayOfWeek,
+    required this.foodCategory,
+    required this.donationCount,
+    required this.avgSurplus,
+    required this.avgRescued,
+    required this.avgUnrescued,
+    this.topDonors = const [],
+  });
+
+  factory AdminRepeatDonorPatternItemModel.fromJson(Map<String, dynamic> json) {
+    return AdminRepeatDonorPatternItemModel(
+      dayOfWeek: json['day_of_week'] ?? '',
+      foodCategory: json['food_category'] ?? '',
+      donationCount: json['donation_count'] ?? 0,
+      avgSurplus: (json['avg_surplus'] as num?)?.toDouble() ?? 0.0,
+      avgRescued: (json['avg_rescued'] as num?)?.toDouble() ?? 0.0,
+      avgUnrescued: (json['avg_unrescued'] as num?)?.toDouble() ?? 0.0,
+      topDonors: (json['top_donors'] as List?)?.map((e) => e.toString()).toList() ?? [],
+    );
+  }
+}
+
+class AdminRepeatDonorInsightsModel {
+  final int totalDonationsAnalyzed;
+  final List<AdminRepeatDonorPatternItemModel> patterns;
+
+  AdminRepeatDonorInsightsModel({
+    required this.totalDonationsAnalyzed,
+    required this.patterns,
+  });
+
+  factory AdminRepeatDonorInsightsModel.fromJson(Map<String, dynamic> json) {
+    return AdminRepeatDonorInsightsModel(
+      totalDonationsAnalyzed: json['total_donations_analyzed'] ?? 0,
+      patterns: (json['patterns'] as List?)
+              ?.map((e) => AdminRepeatDonorPatternItemModel.fromJson(e))
+              .toList() ??
+          [],
     );
   }
 }

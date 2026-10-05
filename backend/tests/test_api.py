@@ -1553,8 +1553,8 @@ def test_part28_21_donor_cannot_access_another_donor_donation():
     # Register Donor 2
     import time
     ts = int(time.time())
-    client.post("/api/auth/register", json={"name": "Donor 2", "email": f"donor2_{ts}@test.com", "password": "pass", "role": "donor"})
-    login2 = client.post("/api/auth/login", json={"email": f"donor2_{ts}@test.com", "password": "pass"})
+    client.post("/api/auth/register", json={"name": "Donor 2", "email": f"donor2_{ts}@test.com", "password": "password123", "role": "donor"})
+    login2 = client.post("/api/auth/login", json={"email": f"donor2_{ts}@test.com", "password": "password123"})
     tok_donor2 = login2.json()["access_token"]
     from datetime import datetime, timedelta, timezone
     now = datetime.now(timezone.utc)

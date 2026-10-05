@@ -1,9 +1,17 @@
+export 'auth_models.dart';
+import 'auth_models.dart';
+
 class UserModel {
   final int id;
   final String name;
   final String email;
   final String? phone;
   final String role; // donor, ngo, volunteer, admin
+
+  UserRole get userRole => UserRole.values.firstWhere(
+        (r) => r.name.toLowerCase() == role.toLowerCase(),
+        orElse: () => UserRole.donor,
+      );
   final String? address;
   final double? latitude;
   final double? longitude;
@@ -88,6 +96,48 @@ class UserModel {
       'phone_country_code': phoneCountryCode,
       'phone_normalized': phoneNormalized,
     };
+  }
+
+  UserModel copyWith({
+    int? id,
+    String? name,
+    String? email,
+    String? phone,
+    String? role,
+    String? address,
+    double? latitude,
+    double? longitude,
+    String? profileImage,
+    bool? isActive,
+    double? donorTrustScore,
+    int? totalMealsDonated,
+    double? reliabilityScore,
+    String? vehicleType,
+    int? carryingCapacity,
+    bool? phoneVerified,
+    String? phoneCountryCode,
+    String? phoneNormalized,
+  }) {
+    return UserModel(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      email: email ?? this.email,
+      phone: phone ?? this.phone,
+      role: role ?? this.role,
+      address: address ?? this.address,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
+      profileImage: profileImage ?? this.profileImage,
+      isActive: isActive ?? this.isActive,
+      donorTrustScore: donorTrustScore ?? this.donorTrustScore,
+      totalMealsDonated: totalMealsDonated ?? this.totalMealsDonated,
+      reliabilityScore: reliabilityScore ?? this.reliabilityScore,
+      vehicleType: vehicleType ?? this.vehicleType,
+      carryingCapacity: carryingCapacity ?? this.carryingCapacity,
+      phoneVerified: phoneVerified ?? this.phoneVerified,
+      phoneCountryCode: phoneCountryCode ?? this.phoneCountryCode,
+      phoneNormalized: phoneNormalized ?? this.phoneNormalized,
+    );
   }
 }
 

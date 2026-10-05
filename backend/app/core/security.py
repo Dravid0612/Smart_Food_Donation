@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import jwt
 import bcrypt
 import hashlib
+import secrets
 from app.core.config import settings
 
 def hash_password(password: str) -> str:
@@ -37,7 +38,7 @@ def create_refresh_token(data: dict) -> str:
     """Creates a long-lived refresh token (7 days) using a separate secret."""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    to_encode.update({"exp": expire, "type": "refresh", "jti": secrets.token_hex(16)})
     return jwt.encode(to_encode, settings.REFRESH_TOKEN_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 def decode_refresh_token(token: str) -> dict:

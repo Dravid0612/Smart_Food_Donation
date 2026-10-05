@@ -10,7 +10,21 @@ library notification_service;
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import '../core/api/api_client.dart';
+
+/// Top-level background message handler required by FirebaseMessaging.
+/// Must be annotated with @pragma('vm:entry-point') so Flutter does not tree-shake it.
+@pragma('vm:entry-point')
+Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Already initialized or platform configuration deferred
+  }
+  debugPrint('[FCM Background] Message ID: ${message.messageId}, type: ${message.data['type']}');
+}
 
 /// Notification deep-link event types (mirrors backend)
 class NotificationEventType {
@@ -98,19 +112,137 @@ Map<String, dynamic>? parseDeepLinkData(String? deepLinkDataJson) {
 
 class NotificationService {
   final ApiClient _apiClient;
+  String? _lastRegisteredToken;
+  bool _isInitialized = false;
 
   NotificationService([ApiClient? apiClient]) : _apiClient = apiClient ?? ApiClient();
 
+  /// Whether Firebase messaging has been initialized.
+  bool get isInitialized => _isInitialized;
+
+  /// Initializes Firebase and configures FCM listeners.
+  /// Safely handles situations where Firebase options / google-services.json are pending.
+  Future<void> initializeFirebase({
+    void Function(RemoteMessage message)? onForegroundMessage,
+    void Function(Map<String, dynamic> data)? onNotificationTap,
+  }) async {
+    if (_isInitialized) return;
+    try {
+      await Firebase.initializeApp();
+
+      // Register background message handler
+      FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+      // Request notification permissions (Android 13+ / iOS)
+      await requestPermission();
+
+      // Setup foreground message listener
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        debugPrint('[FCM Foreground] Received: ${message.notification?.title}');
+        if (onForegroundMessage != null) {
+          onForegroundMessage(message);
+        }
+      });
+
+      // Setup notification tap handler when app is in background
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        debugPrint('[FCM Tap] App opened from background notification: ${message.data}');
+        if (onNotificationTap != null) {
+          onNotificationTap(message.data);
+        }
+      });
+
+      // Check if app was opened from terminated state via notification tap
+      final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+      if (initialMessage != null && onNotificationTap != null) {
+        debugPrint('[FCM Initial] App opened from terminated state notification: ${initialMessage.data}');
+        onNotificationTap(initialMessage.data);
+      }
+
+      // Listen for token refreshes and register updated token
+      FirebaseMessaging.instance.onTokenRefresh.listen((String newToken) {
+        debugPrint('[FCM] Device token refreshed');
+        registerFcmToken(newToken);
+      });
+
+      // Get initial device token and register with backend
+      final token = await getDeviceToken();
+      if (token != null) {
+        await registerFcmToken(token);
+      }
+
+      _isInitialized = true;
+      debugPrint('[NotificationService] Firebase & FCM lifecycle initialized successfully');
+    } catch (e) {
+      debugPrint('[NotificationService] Firebase initialization deferred (manual configuration pending): $e');
+    }
+  }
+
+  /// Requests notification permissions (Android 13+ / iOS).
+  Future<NotificationSettings?> requestPermission() async {
+    try {
+      final settings = await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        announcement: false,
+        badge: true,
+        carPlay: false,
+        criticalAlert: false,
+        provisional: false,
+        sound: true,
+      );
+      debugPrint('[NotificationService] Notification permission status: ${settings.authorizationStatus}');
+      return settings;
+    } catch (e) {
+      debugPrint('[NotificationService] Could not request notification permission: $e');
+      return null;
+    }
+  }
+
+  /// Retrieves the current FCM registration token.
+  Future<String?> getDeviceToken() async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      return token;
+    } catch (e) {
+      debugPrint('[NotificationService] Failed to get FCM device token: $e');
+      return null;
+    }
+  }
+
   /// Registers an FCM device token with the backend.
   Future<void> registerFcmToken(String token) async {
+    if (_lastRegisteredToken == token) {
+      return; // Token already registered during this session, skip redundant call
+    }
     try {
-      await _apiClient.dio.put('/notifications/preferences', data: {
+      await _apiClient.dio.post('/notifications/device-token', data: {
         'fcm_token': token,
       });
+      _lastRegisteredToken = token;
+      debugPrint('[NotificationService] FCM token registered with backend');
     } catch (e) {
       debugPrint('[NotificationService] FCM token registration failed: $e');
     }
   }
+
+  /// Clears the FCM device token from the backend and local instance upon user logout.
+  Future<void> unregisterFcmToken() async {
+    try {
+      await _apiClient.dio.delete('/notifications/device-token');
+      _lastRegisteredToken = null;
+      debugPrint('[NotificationService] FCM token removed from backend');
+    } catch (e) {
+      debugPrint('[NotificationService] FCM token unregistration failed: $e');
+    }
+
+    try {
+      await FirebaseMessaging.instance.deleteToken();
+      debugPrint('[NotificationService] Local FCM device token deleted');
+    } catch (e) {
+      debugPrint('[NotificationService] Local FCM token deletion skipped: $e');
+    }
+  }
+
 
   /// Fetches notification preferences for the current user.
   Future<Map<String, dynamic>?> getPreferences() async {

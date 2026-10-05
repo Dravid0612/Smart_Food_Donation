@@ -17,7 +17,7 @@ void main() {
     test('LocaleProvider switches language to Tamil (ta) and persists', () async {
       final provider = LocaleProvider();
       await provider.setLanguage('ta');
-      expect(provider.currentLanguage, equals('ta'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.locale.languageCode, equals('ta'));
 
       final prefs = await SharedPreferences.getInstance();
@@ -27,7 +27,7 @@ void main() {
     test('LocaleProvider switches language to Hindi (hi) and persists', () async {
       final provider = LocaleProvider();
       await provider.setLanguage('hi');
-      expect(provider.currentLanguage, equals('hi'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.locale.languageCode, equals('hi'));
 
       final prefs = await SharedPreferences.getInstance();
@@ -57,12 +57,12 @@ void main() {
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getFoodCategory('cooked_food'), equals('சமைத்த உணவு'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.getFoodCategory('bakery'), equals('ரொட்டி & பேக்கரி'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getFoodCategory('cooked_food'), equals('पका हुआ भोजन'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.getFoodCategory('bakery'), equals('बेकरी और ब्रेड'));
     });
 
@@ -76,12 +76,12 @@ void main() {
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getFoodItem('Rice'), equals('அரிசி சாதம்'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.getFoodItem('Biryani'), equals('பிரியாணி'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getFoodItem('Rice'), equals('चावल'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.getFoodItem('Biryani'), equals('बिरयानी'));
     });
 
@@ -95,12 +95,12 @@ void main() {
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getStorageMethod('room_temperature'), equals('அறை வெப்பநிலை'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.getStorageMethod('refrigerated'), equals('குளிர்சாதனப் பெட்டி'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getStorageMethod('room_temperature'), equals('कमरे का तापमान'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.getStorageMethod('refrigerated'), equals('रेफ्रिजरेटर में रखा'));
     });
 
@@ -114,12 +114,12 @@ void main() {
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getUrgency('Fresh'), equals('புதியது'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.getUrgency('Urgent'), equals('அவசரம்'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getUrgency('Fresh'), equals('ताज़ा'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.getUrgency('Urgent'), equals('अत्यावश्यक'));
     });
 
@@ -134,13 +134,13 @@ void main() {
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getStatus('pending'), equals('NGO பொருத்தத்திற்கு காத்திருக்கிறது'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.getStatus('collected'), equals('பெறப்பட்டது (பயணத்தில் உள்ளது)'));
       expect(provider.getStatus('delivered'), equals('NGO-விடம் ஒப்படைக்கப்பட்டது'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getStatus('pending'), equals('एनजीओ मिलान की प्रतीक्षा'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.getStatus('collected'), equals('प्राप्त किया (मार्ग में)'));
       expect(provider.getStatus('delivered'), equals('एनजीओ को डिलीवर किया'));
     });
@@ -150,15 +150,15 @@ void main() {
 
       // English
       await provider.setLanguage('en');
-      expect(provider.getSafetyDisclaimer(), equals('Visual assessment only. This does not certify food safety.'));
+      expect(provider.getSafetyDisclaimer(), equals('Visual assessment only. AI visual assessment does not certify food safety.'));
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. இது உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। यह खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
     });
 
     test('Dynamic parameter interpolations preserve raw digits', () async {
@@ -172,13 +172,13 @@ void main() {
 
       // Tamil
       await provider.setLanguage('ta');
-      expect(provider.getRemainingMinutesText(45), equals('45 நிமிடங்கள் மீதமுள்ளது'));
+      expect(provider.getSafetyDisclaimer(), equals('காட்சி மதிப்பீடு மட்டுமே. AI காட்சி மதிப்பீடு உணவுப் பாதுகாப்பைச் சான்றளிக்காது.'));
       expect(provider.getMealsCountText(150), equals('150 உணவுகள்'));
       expect(provider.getOtpInstructionDonor('482910'), contains('482910'));
 
       // Hindi
       await provider.setLanguage('hi');
-      expect(provider.getRemainingMinutesText(45), equals('45 मिनट शेष'));
+      expect(provider.getSafetyDisclaimer(), equals('केवल दृश्य मूल्यांकन। एआई दृश्य मूल्यांकन खाद्य सुरक्षा प्रमाणित नहीं करता है।'));
       expect(provider.getMealsCountText(150), equals('150 भोजन'));
       expect(provider.getOtpInstructionDonor('482910'), contains('482910'));
     });

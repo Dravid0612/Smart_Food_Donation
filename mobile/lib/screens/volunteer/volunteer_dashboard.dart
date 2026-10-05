@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/donation_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/volunteer_task_provider.dart';
 import '../../providers/notification_provider.dart';
@@ -87,26 +88,33 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
     final user = auth.currentUser;
 
     final activeTasks = taskProv.assignedTasks
-        .where((d) => ['volunteer_assigned', 'collected'].contains(d.status.toLowerCase()))
+        .where((d) => ['volunteer_assigned', 'accepted', 'en_route', 'arrived', 'collected', 'in_transit'].contains(d.status.toLowerCase()) && (d.assignedVolunteerId == user?.id || taskProv.getAssignmentId(d.id) != null || d.status.toLowerCase() != 'accepted'))
         .toList();
 
-    // Show ONLY tasks that are genuinely feasible
-    final availablePickups = taskProv.assignedTasks.where((d) {
-      if (d.status.toLowerCase() != 'accepted') return false;
+    // Show ONLY tasks that are genuinely feasible (Section 5) and only when Available (Section 4)
+    final isAvailableNow = taskProv.isAvailable && _currentAvailability != 'offline';
+    final availablePickups = !isAvailableNow
+        ? <DonationModel>[]
+        : taskProv.assignedTasks.where((d) {
+            if (d.status.toLowerCase() != 'accepted') return false;
+            // Exclude direct NGO self-pickup from volunteer dispatch
+            if (d.pickupMode == 'self_pickup') return false;
+            // Exclude tasks already assigned to another volunteer
+            if (d.assignedVolunteerId != null && d.assignedVolunteerId != user?.id) return false;
 
-      final remainingMins = d.remainingMinutes ??
-          FoodRescueStatusHelper.calculateRemainingMinutes(d.expiryTime);
-      if (remainingMins <= 0) return false;
+            final remainingMins = d.remainingMinutes ??
+                FoodRescueStatusHelper.calculateRemainingMinutes(d.expiryTime);
+            if (remainingMins <= 0) return false;
 
-      if (d.feasibility != null && !d.feasibility!.isFeasible) return false;
+            if (d.feasibility != null && !d.feasibility!.isFeasible) return false;
 
-      final fStatus = d.feasibilityStatus.toUpperCase().trim();
-      if (fStatus == 'INFEASIBLE' || fStatus == 'RESCUE_UNLIKELY' || fStatus == 'WINDOW_ENDED') {
-        return false;
-      }
+            final fStatus = d.feasibilityStatus.toUpperCase().trim();
+            if (fStatus == 'INFEASIBLE' || fStatus == 'RESCUE_UNLIKELY' || fStatus == 'WINDOW_ENDED') {
+              return false;
+            }
 
-      return true;
-    }).toList();
+            return true;
+          }).toList();
 
     final completedTasks = taskProv.assignedTasks
         .where((d) => ['delivered', 'completed'].contains(d.status.toLowerCase()))
@@ -287,6 +295,29 @@ class _VolunteerDashboardScreenState extends State<VolunteerDashboardScreen> {
                   style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
                 ),
                 const SizedBox(height: AppTheme.space12),
+
+                if (!isAvailableNow)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: AppTheme.space16),
+                    padding: const EdgeInsets.all(AppTheme.space14),
+                    decoration: BoxDecoration(
+                      color: AppTheme.warning.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                      border: Border.all(color: AppTheme.warning.withValues(alpha: 0.4)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.pause_circle_outline, color: AppTheme.warning, size: 22),
+                        SizedBox(width: AppTheme.space12),
+                        Expanded(
+                          child: Text(
+                            'You are currently marked as Unavailable. Toggle your status to "Available" in the app bar to receive new rescue tasks.',
+                            style: TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                 if (taskProv.isLoading && taskProv.assignedTasks.isEmpty)
                   const Column(

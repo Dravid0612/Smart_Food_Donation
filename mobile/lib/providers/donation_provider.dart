@@ -30,6 +30,24 @@ class DonationProvider extends ChangeNotifier {
   DonorImpactSummaryModel? get donorImpact => _donorImpact;
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
+  bool _isTesting = false;
+
+  void setDonationsForTesting(List<DonationModel> list) {
+    _donations = list;
+    _isTesting = true;
+    notifyListeners();
+  }
+
+  void setCurrentDetailForTesting(DonationModel? d) {
+    _currentDetail = d;
+    _isTesting = true;
+    notifyListeners();
+  }
+
+  void setDonorImpactForTesting(DonorImpactSummaryModel? impact) {
+    _donorImpact = impact;
+    notifyListeners();
+  }
 
   /// Proactive Time-Critical Rescues (< 120m rescue window)
   List<DonationModel> get urgentDonations => _donations.where((d) {
@@ -111,6 +129,7 @@ class DonationProvider extends ChangeNotifier {
   }
 
   Future<void> fetchDonations({String? status, String? category, bool myDonationsOnly = false}) async {
+    if (_isTesting) return;
     _isLoading = true;
     _errorMessage = null;
     notifyListeners();
@@ -136,6 +155,7 @@ class DonationProvider extends ChangeNotifier {
   }
 
   Future<DonationModel?> fetchDonationDetail(int donationId) async {
+    if (_isTesting && _currentDetail != null) return _currentDetail;
     _isLoading = true;
     notifyListeners();
     try {
@@ -188,6 +208,7 @@ class DonationProvider extends ChangeNotifier {
     double? aiConfidenceScore,
     int? conditionScore,
     Map<String, dynamic>? safetyCheckAnswers,
+    String? pickupMode,
   }) async {
     _isLoading = true;
     _errorMessage = null;
@@ -229,6 +250,7 @@ class DonationProvider extends ChangeNotifier {
         'ai_visual_condition': aiVisualCondition ?? 'GOOD',
         'ai_confidence_score': aiConfidenceScore ?? 0.88,
         'condition_score': conditionScore ?? 85,
+        if (pickupMode != null) 'pickup_mode': pickupMode,
         if (safetyCheckAnswers != null) 'safety_check_answers': safetyCheckAnswers,
       });
 
@@ -247,6 +269,35 @@ class DonationProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       return false;
+    }
+  }
+
+  Future<bool> selfDropoffDonation(int donationId) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await _apiClient.dio.post('/donations/$donationId/self-dropoff');
+      await fetchDonationDetail(donationId);
+      await fetchDonations();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<String?> generateClaimToken(int donationId) async {
+    try {
+      final response = await _apiClient.dio.post('/volunteers/donations/$donationId/claim-token');
+      if (response.data != null && response.data['claim_url'] != null) {
+        return response.data['claim_url'] as String;
+      }
+      return null;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -288,6 +339,7 @@ class DonationProvider extends ChangeNotifier {
 
   Future<bool> acceptDonation(int donationId, {String pickupMode = 'volunteer_dispatch'}) async {
     _isLoading = true;
+    _errorMessage = null;
     notifyListeners();
     try {
       await _apiClient.dio.post('/donations/$donationId/accept', data: {
@@ -297,8 +349,18 @@ class DonationProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       return true;
+    } on DioException catch (e) {
+      _isLoading = false;
+      if (e.response?.statusCode == 409) {
+        _errorMessage = 'err_already_accepted';
+      } else {
+        _errorMessage = e.response?.data?['detail']?.toString() ?? e.message ?? 'err_server';
+      }
+      notifyListeners();
+      return false;
     } catch (e) {
       _isLoading = false;
+      _errorMessage = 'err_server';
       notifyListeners();
       return false;
     }
@@ -321,16 +383,47 @@ class DonationProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> rejectDonation(int donationId) async {
+  Future<bool> rejectDonation(int donationId, {String? reason}) async {
     _isLoading = true;
     notifyListeners();
     try {
-      await _apiClient.dio.post('/donations/$donationId/reject');
+      final query = reason != null && reason.trim().isNotEmpty
+          ? '?reason=${Uri.encodeComponent(reason.trim())}'
+          : '';
+      await _apiClient.dio.post('/donations/$donationId/reject$query');
       await fetchDonations();
       _isLoading = false;
       notifyListeners();
       return true;
     } catch (e) {
+      _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> reportDispute({
+    required int donationId,
+    required String issueType,
+    required String description,
+  }) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      await _apiClient.dio.post(
+        '/disputes',
+        data: {
+          'donation_id': donationId,
+          'issue_type': issueType,
+          'description': description,
+        },
+      );
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _errorMessage = e.toString();
       _isLoading = false;
       notifyListeners();
       return false;
@@ -353,11 +446,44 @@ class DonationProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> deliverDonation(int donationId) async {
+  Future<bool> verifyPickupOtp(int donationId, String otp) async {
     _isLoading = true;
     notifyListeners();
     try {
-      await _apiClient.dio.post('/donations/$donationId/deliver');
+      await _apiClient.dio.post(
+        '/donations/$donationId/pickup-otp/verify',
+        data: {'otp': otp},
+      );
+      await fetchDonationDetail(donationId);
+      await fetchDonations();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> deliverDonation(
+    int donationId, {
+    double? receivedQuantity,
+    String? condition,
+    String? remarks,
+  }) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final Map<String, dynamic> data = {};
+      if (receivedQuantity != null) data['received_quantity'] = receivedQuantity;
+      if (condition != null) data['condition'] = condition;
+      if (remarks != null) data['remarks'] = remarks;
+
+      await _apiClient.dio.post(
+        '/donations/$donationId/deliver',
+        data: data.isNotEmpty ? data : null,
+      );
       await fetchDonations();
       _isLoading = false;
       notifyListeners();

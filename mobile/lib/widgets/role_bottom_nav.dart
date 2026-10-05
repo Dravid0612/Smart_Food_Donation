@@ -72,7 +72,7 @@ class RoleBottomNav extends StatelessWidget {
             NavigationDestination(
               icon: const Icon(Icons.two_wheeler_outlined),
               selectedIcon: const Icon(Icons.two_wheeler),
-              label: context.tr('nav_pickups'),
+              label: context.tr('nav_tasks'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.emoji_events_outlined),
@@ -114,7 +114,7 @@ class RoleBottomNav extends StatelessWidget {
             NavigationDestination(
               icon: const Icon(Icons.dashboard_outlined),
               selectedIcon: const Icon(Icons.dashboard),
-              label: context.tr('overview'),
+              label: context.tr('nav_overview'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.local_shipping_outlined),
@@ -124,12 +124,12 @@ class RoleBottomNav extends StatelessWidget {
             NavigationDestination(
               icon: const Icon(Icons.people_alt_outlined),
               selectedIcon: const Icon(Icons.people_alt),
-              label: context.tr('users'),
+              label: context.tr('nav_users'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.verified_outlined),
               selectedIcon: const Icon(Icons.verified),
-              label: context.tr('nav_receiving'),
+              label: context.tr('verify_ngos'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.person_outline),
@@ -164,12 +164,12 @@ class RoleBottomNav extends StatelessWidget {
             NavigationDestination(
               icon: const Icon(Icons.home_outlined),
               selectedIcon: const Icon(Icons.home),
-              label: context.tr('nav_dashboard'),
+              label: context.tr('nav_home'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.add_circle_outline),
               selectedIcon: const Icon(Icons.add_circle),
-              label: context.tr('donate_now'),
+              label: context.tr('nav_donate'),
             ),
             NavigationDestination(
               icon: const Icon(Icons.history_outlined),

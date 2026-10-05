@@ -104,11 +104,29 @@ def _ensure_sqlite_columns():
 if engine.dialect.name == "sqlite":
     _ensure_sqlite_columns()
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup validation and background monitor
+    db_res = validate_database_connection()
+    logger.info(
+        f"[Startup] Database connection verified: dialect={db_res['dialect']} "
+        f"latency={db_res['latency_ms']}ms status={db_res['status']} url={db_res['database_url']}"
+    )
+    from app.services.proactive_dispatch_service import BackgroundUrgencyMonitor
+    BackgroundUrgencyMonitor.start(interval_seconds=60)
+    yield
+    # Graceful shutdown of background monitor
+    from app.services.proactive_dispatch_service import BackgroundUrgencyMonitor
+    BackgroundUrgencyMonitor.stop()
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # CORS Middleware
@@ -208,20 +226,7 @@ app.include_router(feedback.router, prefix=settings.API_V1_STR)
 app.include_router(performance.router, prefix=settings.API_V1_STR)
 app.include_router(webhooks.router, prefix=settings.API_V1_STR)
 
-@app.on_event("startup")
-def on_startup():
-    db_res = validate_database_connection()
-    logger.info(
-        f"[Startup] Database connection verified: dialect={db_res['dialect']} "
-        f"latency={db_res['latency_ms']}ms status={db_res['status']} url={db_res['database_url']}"
-    )
-    from app.services.proactive_dispatch_service import BackgroundUrgencyMonitor
-    BackgroundUrgencyMonitor.start(interval_seconds=60)
 
-@app.on_event("shutdown")
-def stop_proactive_urgency_monitor():
-    from app.services.proactive_dispatch_service import BackgroundUrgencyMonitor
-    BackgroundUrgencyMonitor.stop()
 
 @app.get("/health")
 def health_check():
@@ -248,7 +253,7 @@ def health_check():
             "services": {
                 "background_urgency_monitor": "running" if monitor_running else "stopped",
                 "sms_provider": settings.SMS_PROVIDER,
-                "fcm_configured": bool(settings.FCM_SERVER_KEY),
+                "fcm_configured": bool(settings.FCM_PROJECT_ID and (settings.GOOGLE_APPLICATION_CREDENTIALS or settings.FIREBASE_CREDENTIALS_PATH or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))),
             },
             "version": "1.0.0"
         }
@@ -280,5 +285,14 @@ def root():
         "message": "Welcome to Smart Food Donation Platform API",
         "docs": "/docs",
         "health": "/health",
+        "control_center": "/control-center",
         "version": "1.0.0"
     }
+
+# Mount React Web Control Center (Primary Admin Workspace)
+import os
+from fastapi.staticfiles import StaticFiles
+_web_dist = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "web", "dist"))
+if os.path.exists(_web_dist):
+    app.mount("/control-center", StaticFiles(directory=_web_dist, html=True), name="control-center")
+

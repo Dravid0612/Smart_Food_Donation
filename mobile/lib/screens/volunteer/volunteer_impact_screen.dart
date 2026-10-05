@@ -3,8 +3,10 @@ import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/volunteer_task_provider.dart';
 import '../../widgets/loading_state_widget.dart';
+import '../../widgets/role_bottom_nav.dart';
 
 /// Volunteer Impact Screen showing verified meals transported and reliability metrics.
 class VolunteerImpactScreen extends StatefulWidget {
@@ -23,24 +25,42 @@ class _VolunteerImpactScreenState extends State<VolunteerImpactScreen> {
     });
   }
 
+  String _getReliabilityTier(double score) {
+    if (score >= 95.0) return 'Champion Courier (Tier 1)';
+    if (score >= 85.0) return 'Reliable Partner (Tier 2)';
+    if (score >= 70.0) return 'Active Courier (Tier 3)';
+    return 'Under Review (Tier 4)';
+  }
+
   @override
   Widget build(BuildContext context) {
     final taskProv = Provider.of<VolunteerTaskProvider>(context);
+    final authProv = Provider.of<AuthProvider>(context);
+    final user = authProv.currentUser;
+
     final tasks = taskProv.assignedTasks;
     final completedTasks = tasks.where((d) => ['delivered', 'completed'].contains(d.status.toLowerCase())).toList();
 
     final pickupsCompleted = completedTasks.length;
     final mealsTransported = completedTasks.fold<int>(0, (s, d) => s + d.quantity.toInt());
     final successRate = tasks.isEmpty ? 100 : ((pickupsCompleted / tasks.length) * 100).round();
+    final reliabilityScore = user?.reliabilityScore ?? 98.0;
+    final reliabilityTier = _getReliabilityTier(reliabilityScore);
     final co2SavedKg = (mealsTransported * 0.22).toStringAsFixed(1);
 
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: Text(context.tr('impact_dashboard')),
+        title: const Text('Volunteer Courier Impact'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/volunteer');
+            }
+          },
         ),
       ),
       body: taskProv.isLoading
@@ -79,12 +99,24 @@ class _VolunteerImpactScreenState extends State<VolunteerImpactScreen> {
                         const SizedBox(height: AppTheme.space16),
                         _buildStatRow(context.tr('completed_donations'), '$pickupsCompleted', Icons.local_shipping_outlined),
                         _buildStatRow(context.tr('meals_rescued'), '$mealsTransported', Icons.restaurant_outlined),
-                        _buildStatRow(context.tr('status_delivered'), '$successRate%', Icons.verified_outlined),
-                        _buildStatRow(context.tr('co2_saved'), '$co2SavedKg kg', Icons.cloud_outlined),
+                        _buildStatRow('On-Time Delivery Rate', '$successRate%', Icons.verified_outlined),
+                        _buildStatRow('CO₂ Emission Prevented*', '$co2SavedKg kg', Icons.cloud_outlined),
+                        _buildStatRow('Reliability Score', '$reliabilityScore%', Icons.star_rate_rounded),
+                        _buildStatRow('Reliability Tier', reliabilityTier, Icons.shield_outlined),
                       ],
                     ),
                   ),
-                  const SizedBox(height: AppTheme.space24),
+                  const SizedBox(height: AppTheme.space12),
+
+                  // Environmental figure advisory disclaimer (Section 25)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: AppTheme.space8),
+                    child: Text(
+                      '*Environmental CO₂ emissions prevented are estimates based on standard food waste GHG emission factor models (0.22 kg CO₂e per rescued meal equivalent).',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic, height: 1.4),
+                    ),
+                  ),
+                  const SizedBox(height: AppTheme.space20),
 
                   Container(
                     padding: const EdgeInsets.all(AppTheme.space16),
@@ -105,6 +137,11 @@ class _VolunteerImpactScreenState extends State<VolunteerImpactScreen> {
                                 context.tr('verified_partner'),
                                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.primaryGreen),
                               ),
+                              const SizedBox(height: 2),
+                              const Text(
+                                'Verified Community Courier • Active Dispatch Network',
+                                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                              ),
                             ],
                           ),
                         ),
@@ -115,6 +152,7 @@ class _VolunteerImpactScreenState extends State<VolunteerImpactScreen> {
                 ],
               ),
             ),
+      bottomNavigationBar: const RoleBottomNav(currentRole: 'volunteer', currentIndex: 1),
     );
   }
 

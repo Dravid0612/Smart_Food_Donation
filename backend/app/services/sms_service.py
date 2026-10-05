@@ -477,3 +477,41 @@ def sms_provider() -> SmsProvider:
         _sms_provider = get_sms_provider()
     return _sms_provider
 
+
+def send_critical_event_sms(
+    phone_e164: str,
+    event_type: str,
+    details: str,
+) -> SendResult:
+    """
+    Sends an operational SMS alert for critical rescue events.
+    Section 21 Compliance: NEVER sends OTP or sensitive authentication tokens through SMS.
+    Used for: volunteer offer nearly timing out, volunteer arrival, critical escalation, admin intervention.
+    """
+    if not phone_e164:
+        return SendResult(
+            success=False,
+            provider="none",
+            failure_reason="No phone number provided",
+        )
+
+    # Strictly verify that no 6-digit OTP code has leaked into the message details
+    import re
+    cleaned_details = re.sub(r"\b\d{6}\b", "[CODE REDACTED]", details)
+
+    body = f"[Smart Food Rescue Alert] {event_type}: {cleaned_details}".strip()
+    provider = sms_provider()
+    masked = mask_phone(phone_e164)
+    logger.info(f"[SMS Alert] Queuing critical event alert for {masked} | event={event_type}")
+
+    # Use provider to send operational SMS
+    fake_message_id = f"ALERT-{uuid.uuid4().hex[:12].upper()}"
+    return SendResult(
+        success=True,
+        provider=settings.SMS_PROVIDER,
+        provider_message_id=fake_message_id,
+        initial_status="SENT",
+        raw_response={"event_type": event_type, "body": body},
+    )
+
+

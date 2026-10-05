@@ -30,11 +30,17 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.query(User).filter(User.id == int(user_id)).first()
     if user is None:
         raise credentials_exception
-    if not user.is_active:
-        # HTTP 403 Forbidden — account deactivated by admin
+    # For volunteers, is_active is the dispatch availability toggle.
+    # Non-volunteers with is_active=False or restricted users are blocked by admin.
+    if not user.is_active and user.role != "volunteer":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is inactive. Please contact the platform administrator."
+        )
+    if user.admin_action_status == "RESTRICTED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Account has been restricted by platform administrator."
         )
     return user
 

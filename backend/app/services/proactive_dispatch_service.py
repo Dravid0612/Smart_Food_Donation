@@ -1352,7 +1352,10 @@ class BackgroundUrgencyMonitor:
             # Continuous Feasibility & Telemetry Staleness Monitoring for Active Rescues
             from app.services.rematching_service import rematching_service
             active_rescues = db.query(FoodDonation).filter(
-                FoodDonation.status.in_(["volunteer_assigned", "en_route", "in_transit"]),
+                FoodDonation.status.in_([
+                    "volunteer_assigned", "pickup_en_route", "en_route",
+                    "arrived_at_donor", "arrived", "collected", "in_transit"
+                ]),
                 FoodDonation.assigned_volunteer_id.isnot(None)
             ).all()
 

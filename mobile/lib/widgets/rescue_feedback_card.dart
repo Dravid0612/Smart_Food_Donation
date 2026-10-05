@@ -157,6 +157,7 @@ class RescueFeedbackCard extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: AppTheme.secondaryTerracotta,
                     side: const BorderSide(color: AppTheme.secondaryTerracotta),
+                    minimumSize: const Size(0, 40),
                     padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
                   ),

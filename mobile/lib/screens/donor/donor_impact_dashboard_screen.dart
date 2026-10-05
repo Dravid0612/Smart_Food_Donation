@@ -21,13 +21,19 @@ class _DonorImpactDashboardScreenState extends State<DonorImpactDashboardScreen>
   @override
   void initState() {
     super.initState();
+    final prov = Provider.of<DonationProvider>(context, listen: false);
+    _isLoading = prov.donorImpact == null;
     _loadImpact();
   }
 
   Future<void> _loadImpact() async {
-    setState(() => _isLoading = true);
     final prov = Provider.of<DonationProvider>(context, listen: false);
-    await prov.fetchDonorImpactSummary();
+    if (prov.donorImpact == null) {
+      setState(() => _isLoading = true);
+      await prov.fetchDonorImpactSummary();
+    } else {
+      _isLoading = false;
+    }
     if (mounted) setState(() => _isLoading = false);
   }
 
@@ -115,7 +121,7 @@ class _DonorImpactDashboardScreenState extends State<DonorImpactDashboardScreen>
                     _buildRecognitionCard(impact?.recognitionLevel ?? context.tr('verified_partner').toUpperCase()),
                     const SizedBox(height: AppTheme.space16),
 
-                    // Primary Separated Metrics Grid
+                    // Primary Separated Metrics Grid (5 Authoritative Environmental/Social Indicators)
                     Text(
                       context.tr('impact_summary').toUpperCase(),
                       style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 0.5),
@@ -125,21 +131,21 @@ class _DonorImpactDashboardScreenState extends State<DonorImpactDashboardScreen>
                       children: [
                         Expanded(
                           child: _buildMetricCard(
-                            title: context.tr('donation_history'),
-                            value: '${impact?.mealsDonated.toInt() ?? 0}',
-                            subtitle: context.tr('unit_meals'),
-                            color: AppTheme.info,
-                            icon: Icons.post_add,
+                            title: context.tr('meals_rescued'),
+                            value: '${impact?.mealsRescued.toInt() ?? 0}',
+                            subtitle: 'Rescued meals delivered',
+                            color: AppTheme.primaryGreen,
+                            icon: Icons.restaurant_rounded,
                           ),
                         ),
                         const SizedBox(width: AppTheme.space8),
                         Expanded(
                           child: _buildMetricCard(
-                            title: context.tr('meals_rescued'),
-                            value: '${impact?.mealsRescued.toInt() ?? 0}',
-                            subtitle: context.tr('status_delivered'),
-                            color: AppTheme.primaryGreen,
-                            icon: Icons.check_circle_outline,
+                            title: 'Food Recovered',
+                            value: '${(impact?.estimatedWasteDivertedKg ?? ((impact?.mealsRescued ?? 0) * 0.45)).toStringAsFixed(1)} kg',
+                            subtitle: 'Edible food saved',
+                            color: AppTheme.info,
+                            icon: Icons.scale_rounded,
                           ),
                         ),
                       ],
@@ -149,26 +155,62 @@ class _DonorImpactDashboardScreenState extends State<DonorImpactDashboardScreen>
                       children: [
                         Expanded(
                           child: _buildMetricCard(
-                            title: context.tr('completed_donations'),
-                            value: '${impact?.mealsDistributed.toInt() ?? 0}',
-                            subtitle: context.tr('status_completed'),
-                            color: AppTheme.secondaryTerracotta,
-                            icon: Icons.volunteer_activism,
+                            title: 'Estimated CO2e',
+                            value: '${((impact?.mealsRescued ?? 0) * 0.45).toStringAsFixed(1)} kg',
+                            subtitle: 'Estimated greenhouse gases prevented',
+                            color: AppTheme.warning,
+                            icon: Icons.eco_rounded,
                           ),
                         ),
                         const SizedBox(width: AppTheme.space8),
                         Expanded(
                           child: _buildMetricCard(
-                            title: context.tr('co2_saved'),
-                            value: '${impact?.estimatedWasteDivertedKg.toStringAsFixed(1) ?? "0.0"} kg',
-                            subtitle: context.tr('co2_saved'),
-                            color: AppTheme.warning,
-                            icon: Icons.eco,
+                            title: 'Estimated Water',
+                            value: '${((impact?.mealsRescued ?? 0) * 180).toInt()} L',
+                            subtitle: 'Embedded water footprint conserved',
+                            color: const Color(0xFF0284C7),
+                            icon: Icons.water_drop_rounded,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: AppTheme.space24),
+                    const SizedBox(height: AppTheme.space8),
+                    _buildMetricCard(
+                      title: 'Estimated Disposal Cost Avoided',
+                      value: '₹${((impact?.mealsRescued ?? 0) * 12).toInt()}',
+                      subtitle: 'Estimated municipal waste processing cost saved',
+                      color: AppTheme.secondaryTerracotta,
+                      icon: Icons.savings_outlined,
+                    ),
+                    const SizedBox(height: AppTheme.space16),
+
+                    // Mandatory Non-Binding Estimate / No Tax Write-off Disclaimer
+                    Container(
+                      padding: const EdgeInsets.all(AppTheme.space12),
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade50,
+                        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                        border: Border.all(color: Colors.amber.shade200),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.info_outline_rounded, color: Colors.amber.shade800, size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              context.tr('tax_deduction_disclaimer'),
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: Colors.amber.shade900,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: AppTheme.space20),
 
                     // Primary CTA: Donate Again
                     PrimaryActionButton(

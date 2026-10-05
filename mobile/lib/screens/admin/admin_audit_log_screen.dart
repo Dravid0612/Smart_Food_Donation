@@ -86,7 +86,14 @@ class _AdminAuditLogScreenState extends State<AdminAuditLogScreen> {
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
-        title: const Text('A7: Security Audit Log', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('A7: Security Audit Log', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            Text('Auditable History', style: TextStyle(fontSize: 12, color: Colors.white70)),
+          ],
+        ),
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => context.pop()),
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: _fetchAuditLogs),

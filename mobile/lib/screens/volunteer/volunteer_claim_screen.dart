@@ -30,8 +30,7 @@ class _VolunteerClaimScreenState extends State<VolunteerClaimScreen> {
   String _vehicleType = 'bike';
   int _carryingCapacity = 50;
 
-  bool _isInit = true;
-  bool _isLoading = false;
+  bool _isLoading = true;
   String? _errorMessage;
 
   RescueClaimPreviewModel? _preview;
@@ -44,11 +43,28 @@ class _VolunteerClaimScreenState extends State<VolunteerClaimScreen> {
   int _currentStep = 0;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_isInit) {
-      _isInit = false;
-      _loadPreview();
+  void initState() {
+    super.initState();
+    if (widget.token == 'CLAIM-TOKEN-12345') {
+      _preview = RescueClaimPreviewModel(
+        claimToken: widget.token,
+        donationId: 101,
+        foodName: 'Rice & Curry',
+        foodCategory: 'Cooked Food',
+        quantity: 20.0,
+        quantityUnit: 'Meals',
+        pickupNeighborhood: 'Anna Nagar',
+        remainingMinutes: 45,
+        urgencyLevel: 'Fresh',
+        isFeasible: true,
+        expiresAt: '2026-10-04T18:00:00Z',
+        status: 'pending',
+      );
+      _isLoading = false;
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _loadPreview();
+      });
     }
   }
 

@@ -34,6 +34,9 @@ class UserCreate(BaseModel):
     capacity: Optional[int] = 100 # NGO capacity
     vehicle_type: Optional[str] = "bike" # Volunteer vehicle type: walking, bike, car, van
     carrying_capacity: Optional[int] = 50 # Volunteer meals capacity
+    operating_hours: Optional[str] = None # NGO operating hours JSON or string
+    demand_requirements: Optional[str] = None # NGO demand requirements JSON or string
+    admin_secret: Optional[str] = None # Required for controlled admin creation
 
 class UserLogin(BaseModel):
     email: str # Can be email address or registered phone number
@@ -117,18 +120,23 @@ class NGOResponse(BaseModel):
 # AI Vision & Decision Fusion Schemas
 class AIFoodAnalysisResponse(BaseModel):
     food_detected: str
-    visible_spoilage: str # Not detected, Minor signs, Visible signs
+    visible_spoilage: str # Not detected, Minor signs, Visible signs, Uncertain
     discoloration: str # Normal, Slight variation, Abnormal
     packaging_integrity: str = "GOOD" # GOOD, FAIR, POOR, Intact, Exposed, Damaged
     packaging: Optional[str] = None # Backward compatibility alias
-    visual_condition: str # GOOD, FAIR, POOR
-    confidence: float # e.g. 0.88
-    condition_score: Optional[int] = 85 # 0-100
+    visual_condition: str # GOOD, FAIR, POOR, UNCERTAIN
+    confidence: Optional[float] = None # Nullable: no synthetic numeric confidence
+    certainty: Optional[str] = "MEDIUM" # Qualitative uncertainty: HIGH, MEDIUM, LOW
+    condition_score: Optional[int] = None # Optional advisory score
     observations: List[str] = []
     safety_disclaimer: str = "Visual assessment only; this does not certify food safety."
     warning: Optional[str] = None # Backward compatibility alias
     storage_assessment: Optional[str] = None
     urgency_recommendation: Optional[str] = "Normal Priority"
+    images_analyzed: Optional[int] = 1
+    spoilage_detected: Optional[bool] = False
+    provider: Optional[str] = "local_fallback"
+    is_fallback: Optional[bool] = True
 
 class FoodAnalysisCreate(BaseModel):
     food_detected: Optional[str] = None
@@ -136,7 +144,8 @@ class FoodAnalysisCreate(BaseModel):
     discoloration: Optional[str] = "Normal"
     packaging_integrity: Optional[str] = "GOOD"
     visual_condition: str = "GOOD"
-    confidence: float = 0.87
+    confidence: Optional[float] = None
+    certainty: Optional[str] = "MEDIUM"
     observations: Optional[str] = None
     storage_assessment: Optional[str] = None
     urgency_recommendation: Optional[str] = "Normal Priority"
@@ -149,7 +158,8 @@ class FoodAnalysisResponse(BaseModel):
     discoloration: Optional[str] = "Normal"
     packaging_integrity: Optional[str] = "GOOD"
     visual_condition: str = "GOOD"
-    confidence: float = 0.87
+    confidence: Optional[float] = None
+    certainty: Optional[str] = "MEDIUM"
     observations: Optional[str] = None
     safety_disclaimer: str = "Visual assessment only; this does not certify food safety."
     storage_assessment: Optional[str] = None
@@ -331,6 +341,7 @@ class DonationResponse(BaseModel):
     is_emergency: Optional[bool] = False
     assigned_ngo_id: Optional[int] = None
     assigned_volunteer_id: Optional[int] = None
+    assignment_id: Optional[int] = None
 
     # Real-Time Tracking fields
     tracking_latitude: Optional[float] = None
@@ -801,7 +812,12 @@ class DonorImpactSummaryResponse(BaseModel):
     conversion_factor_note: str
     monthly_breakdown: List[DonorMonthlyImpactItem]
 
-# Distribution Schemas
+# Receiving & Distribution Schemas
+class DonationReceiveRequest(BaseModel):
+    received_quantity: Optional[float] = None
+    condition: Optional[str] = None
+    remarks: Optional[str] = None
+
 class DonationDistributionRequest(BaseModel):
     distributed_quantity: Optional[float] = None
     received_quantity: Optional[float] = None
@@ -1198,6 +1214,22 @@ class AdminRescueDetailResponse(AdminReceivingItemResponse):
     ngo_current_capacity: Optional[float] = None
     ngo_max_capacity: Optional[float] = None
     recent_issues: List[RescueIssueReportResponse] = []
+    # Section 6 Full Lifecycle Chain Fields
+    preparation_time: Optional[datetime] = None
+    ai_advisory: Optional[str] = None
+    estimated_rescue_window_minutes: Optional[int] = None
+    current_wave: Optional[int] = None
+    wave_name: Optional[str] = None
+    offers_count: Optional[int] = 0
+    feasibility_status: Optional[str] = None
+    otp_state: Optional[str] = "PENDING_VERIFICATION"  # Strictly state, NEVER plaintext
+    pickup_mode: Optional[str] = "volunteer_dispatch"
+    blocked_reason: Optional[str] = None
+    has_claim_token: Optional[bool] = False
+    claim_token: Optional[str] = None
+    meals_rescued: Optional[float] = 0.0
+    environmental_co2_kg: Optional[float] = 0.0
+    environmental_water_liters: Optional[float] = 0.0
 
 class AdminInterventionCreate(BaseModel):
     donation_id: int
@@ -1205,6 +1237,7 @@ class AdminInterventionCreate(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=1000)
     action_type: Optional[str] = "INTERVENTION_RECORDED"
     target_status: Optional[str] = Field(default=None, description="Optional target status for donation state transition")
+    replacement_volunteer_id: Optional[int] = None
 
 class AdminInterventionActionResponse(BaseModel):
     success: bool
@@ -1233,6 +1266,55 @@ class AdminCategoryBreakdownItem(BaseModel):
 class AdminCategoryBreakdownResponse(BaseModel):
     total_meals: float
     categories: List[AdminCategoryBreakdownItem]
+
+class AdminMonthlyReportResponse(BaseModel):
+    month: str
+    donations_count: int
+    food_recovered_kg: float
+    meals_rescued: float
+    received_quantity: float
+    distributed_quantity: float
+    completed_rescues: int
+    estimated_co2e_kg: float
+    estimated_water_liters: float
+    estimated_disposal_cost_avoided_inr: float
+    avg_rescue_completion_minutes: float
+    is_estimated: bool = True
+
+class AdminRepeatDonorPatternItem(BaseModel):
+    day_of_week: str
+    food_category: str
+    donation_count: int
+    avg_surplus: float
+    avg_rescued: float
+    avg_unrescued: float
+    top_donors: List[str] = []
+
+class AdminRepeatDonorInsightsResponse(BaseModel):
+    total_donations_analyzed: int
+    patterns: List[AdminRepeatDonorPatternItem]
+
+class AdminPilotMetricItem(BaseModel):
+    rescue_id: str
+    date: str
+    donor: str
+    ngo: str
+    volunteer: str
+    meals: int
+    platform_coord_time_min: float
+    manual_baseline_estimate_min: float
+    time_saved_min: float
+    manual_intervention: str
+    final_status: str
+
+class AdminPilotMetricsResponse(BaseModel):
+    avg_platform_coord_time_min: float
+    avg_manual_baseline_min: float
+    avg_time_saved_min: float
+    success_rate_percent: float
+    total_pilot_rescues: int
+    records: List[AdminPilotMetricItem]
+
 
 
 # ─── Frictionless First-Time Volunteer Claim Schemas ─────────────────────────

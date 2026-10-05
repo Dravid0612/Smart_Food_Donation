@@ -4,12 +4,12 @@ import '../../core/storage/secure_storage.dart';
 import '../../screens/splash/splash_screen.dart';
 import '../../screens/onboarding/onboarding_screen.dart';
 import '../../screens/auth/login_screen.dart';
-import '../../screens/auth/donor_login_screen.dart';
-import '../../screens/auth/ngo_login_screen.dart';
-import '../../screens/auth/volunteer_login_screen.dart';
-import '../../screens/auth/admin_login_screen.dart';
 import '../../screens/auth/register_screen.dart';
 import '../../screens/auth/forgot_password_screen.dart';
+import 'package:provider/provider.dart';
+import '../../core/models/auth_models.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/ngo_provider.dart';
 
 // Donor
 import '../../screens/donor/donor_dashboard.dart';
@@ -32,6 +32,7 @@ import '../../screens/ngo/ngo_dashboard.dart';
 import '../../screens/ngo/ngo_food_requirements_screen.dart';
 import '../../screens/ngo/ngo_history_screen.dart';
 import '../../screens/ngo/ngo_receiving_distribution_screen.dart';
+import '../../screens/ngo/ngo_verification_pending_screen.dart';
 
 // Volunteer
 import '../../screens/volunteer/volunteer_dashboard.dart';
@@ -51,6 +52,7 @@ import '../../screens/admin/admin_interventions_screen.dart';
 import '../../screens/admin/admin_disputes_screen.dart';
 import '../../screens/admin/admin_performance_screen.dart';
 import '../../screens/admin/admin_audit_log_screen.dart';
+import '../../screens/admin/admin_monthly_report_screen.dart';
 
 // Shared
 import '../../screens/notifications/notification_center_screen.dart';
@@ -77,18 +79,22 @@ final GoRouter appRouter = GoRouter(
       return null;
     }
 
-    // 2. Parse authoritative role from verified local storage
+    // 2. Parse authoritative role and verification status from verified local storage
     String role = 'donor';
+    bool ngoVerified = true;
     try {
       final Map<String, dynamic> userMap = jsonDecode(userData);
       role = (userMap['role'] ?? 'donor').toString().toLowerCase();
+      if (userMap.containsKey('ngo_verified')) {
+        ngoVerified = userMap['ngo_verified'] == true;
+      }
     } catch (_) {}
 
     // 3. If already logged in and visiting public auth screens, redirect to role dashboard
     if (location.startsWith('/login') || location == '/register' || location == '/forgot-password' || location == '/onboarding' || location == '/') {
       switch (role) {
         case 'ngo':
-          return '/ngo';
+          return ngoVerified ? '/ngo' : '/ngo/pending';
         case 'volunteer':
           return '/volunteer';
         case 'admin':
@@ -105,8 +111,11 @@ final GoRouter appRouter = GoRouter(
         return '/donor';
       }
     } else if (role == 'ngo') {
+      if (!ngoVerified && location != '/ngo/pending') {
+        return '/ngo/pending';
+      }
       if (location.startsWith('/donor') || location.startsWith('/volunteer') || location.startsWith('/admin')) {
-        return '/ngo';
+        return ngoVerified ? '/ngo' : '/ngo/pending';
       }
     } else if (role == 'volunteer') {
       if (location.startsWith('/donor') || location.startsWith('/ngo') || location.startsWith('/admin')) {
@@ -123,23 +132,99 @@ final GoRouter appRouter = GoRouter(
   routes: [
     GoRoute(path: '/', builder: (context, state) => const SplashScreen()),
     GoRoute(path: '/onboarding', builder: (context, state) => const OnboardingScreen()),
-    GoRoute(path: '/login', builder: (context, state) => const LoginScreen()),
-    GoRoute(path: '/login/donor', builder: (context, state) => const DonorLoginScreen()),
-    GoRoute(path: '/login/ngo', builder: (context, state) => const NgoLoginScreen()),
-    GoRoute(path: '/login/volunteer', builder: (context, state) => const VolunteerLoginScreen()),
-    GoRoute(path: '/login/admin', builder: (context, state) => const AdminLoginScreen()),
+    GoRoute(
+      path: '/login',
+      builder: (context, state) => LoginScreen(
+        onLogin: (identifier, password) async {
+          final authProvider = Provider.of<AuthProvider>(context, listen: false);
+          final success = await authProvider.login(identifier, password);
+          if (!success) {
+            throw AuthException(authProvider.errorMessage ?? 'Invalid credentials.');
+          }
+          final roleStr = authProvider.currentUser?.role ?? 'donor';
+          final userRole = UserRole.values.firstWhere(
+            (r) => r.name.toLowerCase() == roleStr.toLowerCase(),
+            orElse: () => UserRole.donor,
+          );
+          bool ngoVerified = true;
+          if (userRole == UserRole.ngo) {
+            final ngoProvider = Provider.of<NgoProvider>(context, listen: false);
+            await ngoProvider.fetchMyNgo();
+            ngoVerified = ngoProvider.isVerified;
+            final storage = SecureStorageService();
+            final userDataStr = await storage.getUserData();
+            if (userDataStr != null) {
+              final map = jsonDecode(userDataStr) as Map<String, dynamic>;
+              map['ngo_verified'] = ngoVerified;
+              await storage.saveUserData(jsonEncode(map));
+            }
+          }
+          return AuthResult(
+            role: userRole,
+            displayName: authProvider.currentUser?.name ?? 'User',
+            ngoVerified: ngoVerified,
+          );
+        },
+        onRejectSession: () async {
+          final authProvider = Provider.of<AuthProvider>(context, listen: false);
+          await authProvider.logout();
+        },
+        onRoleRouted: (route) => context.go(route),
+        onForgotPassword: () => context.push('/forgot-password'),
+        onNavigateToRegister: () => context.push('/register'),
+      ),
+    ),
+    GoRoute(path: '/login/donor', redirect: (context, state) => '/login'),
+    GoRoute(path: '/login/ngo', redirect: (context, state) => '/login'),
+    GoRoute(path: '/login/volunteer', redirect: (context, state) => '/login'),
+    GoRoute(path: '/login/admin', redirect: (context, state) => '/login'),
     GoRoute(path: '/forgot-password', builder: (context, state) => const ForgotPasswordScreen()),
     GoRoute(
       path: '/register',
-      builder: (context, state) {
-        String? role;
-        if (state.extra is Map<String, dynamic>) {
-          role = (state.extra as Map<String, dynamic>)['role'] as String?;
-        } else if (state.extra is String) {
-          role = state.extra as String;
-        }
-        return RegisterScreen(initialRole: role);
-      },
+      builder: (context, state) => RegisterScreen(
+        onRegister: (request) async {
+          final authProvider = Provider.of<AuthProvider>(context, listen: false);
+          final isEmail = request.contact.contains('@');
+          final email = isEmail
+              ? request.contact
+              : '${request.contact.replaceAll(RegExp(r'\D'), '')}@foodrescue.org';
+          final phone = isEmail ? null : request.contact;
+          final roleStr = request.role.name;
+
+          final success = await authProvider.register(
+            name: request.name,
+            email: email,
+            password: request.password,
+            phone: phone,
+            role: roleStr,
+            organizationName: (request.role == UserRole.ngo || request.role == UserRole.donor)
+                ? request.extraField
+                : null,
+            vehicleType: request.role == UserRole.volunteer ? request.extraField : null,
+            adminSecret: request.role == UserRole.admin ? (request.adminSecret ?? request.extraField) : null,
+          );
+
+          if (!success) {
+            throw AuthException(authProvider.errorMessage ?? 'Could not create account');
+          }
+
+          if (request.role == UserRole.ngo) {
+            final storage = SecureStorageService();
+            final userDataStr = await storage.getUserData();
+            if (userDataStr != null) {
+              final map = jsonDecode(userDataStr) as Map<String, dynamic>;
+              map['ngo_verified'] = false;
+              await storage.saveUserData(jsonEncode(map));
+            }
+          }
+
+          return AuthResult(
+            role: request.role,
+            displayName: request.name,
+            ngoVerified: false,
+          );
+        },
+      ),
     ),
 
     // ─── Donor Routes ───────────────────────────────────────────────────────
@@ -195,6 +280,27 @@ final GoRouter appRouter = GoRouter(
     ),
 
     // ─── NGO Routes ─────────────────────────────────────────────────────────
+    GoRoute(
+      path: '/ngo/pending',
+      builder: (context, state) {
+        final ngoProv = Provider.of<NgoProvider>(context);
+        final authProv = Provider.of<AuthProvider>(context, listen: false);
+        final orgName = ngoProv.myNgo?.organizationName ?? authProv.currentUser?.name ?? 'Your Organisation';
+        return NgoVerificationPendingScreen(
+          organisationName: orgName,
+          onLogout: () async {
+            await authProv.logout();
+            context.go('/login');
+          },
+          onRefreshStatus: () async {
+            await ngoProv.fetchMyNgo();
+            if (ngoProv.isVerified) {
+              context.go('/ngo');
+            }
+          },
+        );
+      },
+    ),
     GoRoute(path: '/ngo', builder: (context, state) => const NgoDashboardScreen()),
     GoRoute(path: '/ngo/requirements', builder: (context, state) => const NgoFoodRequirementsScreen()),
     GoRoute(path: '/ngo/history', builder: (context, state) => const NgoHistoryScreen()),
@@ -242,6 +348,7 @@ final GoRouter appRouter = GoRouter(
     GoRoute(path: '/admin/disputes', builder: (context, state) => const AdminDisputesScreen()),
     GoRoute(path: '/admin/performance', builder: (context, state) => const AdminPerformanceScreen()),
     GoRoute(path: '/admin/audit-logs', builder: (context, state) => const AdminAuditLogScreen()),
+    GoRoute(path: '/admin/monthly-report', builder: (context, state) => const AdminMonthlyReportScreen()),
 
     // ─── Shared Routes ───────────────────────────────────────────────────────
     GoRoute(path: '/notifications', builder: (context, state) => const NotificationCenterScreen()),

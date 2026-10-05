@@ -10,10 +10,19 @@ class NgoProvider extends ChangeNotifier {
 
   List<NgoModel> get ngos => _ngos;
   NgoModel? get myNgo => _myNgo;
-  bool get isVerified => _myNgo?.isVerified ?? true;
+  bool get isVerified => _myNgo?.isVerified ?? false;
   bool get isLoading => _isLoading;
 
+  bool _isTesting = false;
+
+  void setMyNgoForTesting(NgoModel? ngo) {
+    _myNgo = ngo;
+    _isTesting = true;
+    notifyListeners();
+  }
+
   Future<void> fetchMyNgo() async {
+    if (_isTesting) return;
     try {
       final response = await _apiClient.dio.get('/ngos/me');
       _myNgo = NgoModel.fromJson(response.data);
@@ -38,6 +47,7 @@ class NgoProvider extends ChangeNotifier {
   Future<bool> verifyNgo(int ngoId) async {
     try {
       await _apiClient.dio.post('/ngos/$ngoId/verify');
+      await fetchMyNgo();
       await fetchNgos();
       return true;
     } catch (e) {
@@ -51,6 +61,7 @@ class NgoProvider extends ChangeNotifier {
         'capacity': capacity,
         'is_available': isAvailable,
       });
+      await fetchMyNgo();
       await fetchNgos();
       return true;
     } catch (e) {
@@ -63,6 +74,7 @@ class NgoProvider extends ChangeNotifier {
       await _apiClient.dio.put('/ngos/$ngoId/operating-hours', data: {
         'operating_hours': schedule,
       });
+      await fetchMyNgo();
       await fetchNgos();
       return true;
     } catch (e) {
@@ -75,6 +87,7 @@ class NgoProvider extends ChangeNotifier {
       await _apiClient.dio.put('/ngos/$ngoId/demands', data: {
         'demand_requirements': demands,
       });
+      await fetchMyNgo();
       await fetchNgos();
       return true;
     } catch (e) {

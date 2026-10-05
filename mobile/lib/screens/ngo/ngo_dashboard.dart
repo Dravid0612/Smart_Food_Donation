@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
@@ -13,6 +15,9 @@ import '../../widgets/skeleton_loader.dart';
 import '../../widgets/empty_state_widget.dart';
 import '../../widgets/error_state_widget.dart';
 import '../../widgets/role_bottom_nav.dart';
+import '../../widgets/donation_status_timeline.dart';
+import '../../widgets/report_problem_dialog.dart';
+import 'ngo_verification_pending_screen.dart';
 
 /// NGO Feed & Dashboard focusing on available surplus food items with 1-tap Accept/Reject.
 class NgoDashboardScreen extends StatefulWidget {
@@ -70,15 +75,17 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
     }
   }
 
-  void _showAcceptMethodSheet(int donationId, String foodName) {
+  void _showAcceptMethodSheet(int donationId, String foodName, [double? quantity]) {
+    final isSmallDonation = quantity != null && quantity <= 15;
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppTheme.card,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusFeatureCard)),
       ),
       builder: (ctx) => SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(AppTheme.space20),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -141,13 +148,31 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              context.tr('collect_yourself'),
-                              style: const TextStyle(
-                                fontSize: 15,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.primaryGreen,
-                              ),
+                            Row(
+                              children: [
+                                Text(
+                                  context.tr('collect_yourself'),
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.primaryGreen,
+                                  ),
+                                ),
+                                if (isSmallDonation) ...[
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryGreen.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      context.tr('small_donation_pref'),
+                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                             const SizedBox(height: 3),
                             Text(
@@ -221,15 +246,247 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
     );
   }
 
-  Future<void> _handleReject(int donationId) async {
+  void _showRejectReasonSheet(int donationId, String foodName) {
+    String selectedReason = 'Capacity full';
+    final reasons = [
+      {'key': 'Capacity full', 'label': context.tr('reject_reason_capacity_full')},
+      {'key': 'Food not required', 'label': context.tr('reject_reason_not_required')},
+      {'key': 'Closed', 'label': context.tr('reject_reason_closed')},
+      {'key': 'Pickup unavailable', 'label': context.tr('reject_reason_pickup_unavailable')},
+      {'key': 'Too far', 'label': context.tr('reject_reason_too_far')},
+      {'key': 'Other', 'label': context.tr('reject_reason_other')},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.card,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusFeatureCard)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(AppTheme.space20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Text(
+                  context.tr('reject_reason_title'),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${context.tr('pass')}: $foodName',
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 12),
+                ...reasons.map((r) {
+                  final isSelected = selectedReason == r['key'];
+                  return RadioListTile<String>(
+                    value: r['key']!,
+                    groupValue: selectedReason,
+                    onChanged: (val) {
+                      if (val != null) {
+                        setSheetState(() => selectedReason = val);
+                      }
+                    },
+                    title: Text(
+                      r['label']!,
+                      style: TextStyle(
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? AppTheme.primaryGreen : AppTheme.textPrimary,
+                        fontSize: 14,
+                      ),
+                    ),
+                    activeColor: AppTheme.primaryGreen,
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                  );
+                }),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      final prov = Provider.of<DonationProvider>(context, listen: false);
+                      final ok = await prov.rejectDonation(donationId, reason: selectedReason);
+                      if (!mounted) return;
+                      if (ok) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('${context.tr('pass')} ($selectedReason)')),
+                        );
+                        _loadData();
+                      }
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.error,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                    ),
+                    child: Text(
+                      context.tr('confirm_reject'),
+                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareViaWhatsApp(BuildContext context, dynamic item) async {
     final prov = Provider.of<DonationProvider>(context, listen: false);
-    final ok = await prov.rejectDonation(donationId);
+    final claimUrl = await prov.generateClaimToken(item.id);
+    if (!context.mounted) return;
+    final fullLink = 'https://smartfoodrescue.org${claimUrl ?? "/claim/${item.id}"}';
+    final shareMsg = context.tr('share_whatsapp_msg', {
+      'food': context.trFood(item.foodName),
+      'qty': '${item.quantity.toInt()} ${context.trUnit(item.quantityUnit ?? "Meals")}',
+      'location': 'Approximate Area',
+      'link': fullLink,
+    });
+
+    final uri = Uri.parse('whatsapp://send?text=${Uri.encodeComponent(shareMsg)}');
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        await Clipboard.setData(ClipboardData(text: '$shareMsg\n$fullLink'));
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(context.tr('claim_link_copied')),
+              backgroundColor: AppTheme.primaryGreen,
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: '$shareMsg\n$fullLink'));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.tr('claim_link_copied')),
+            backgroundColor: AppTheme.primaryGreen,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showVerifyOtpDialog(int donationId) {
+    final otpController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(context.tr('action_verify_donor_otp')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter the 6-digit verification OTP provided by the food donor upon collection.',
+              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: otpController,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              style: const TextStyle(fontSize: 20, letterSpacing: 8, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+              decoration: InputDecoration(
+                hintText: '000000',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                counterText: '',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(context.tr('cancel')),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final otp = otpController.text.trim();
+              if (otp.length != 6) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter a valid 6-digit OTP')),
+                );
+                return;
+              }
+              Navigator.pop(ctx);
+              final prov = Provider.of<DonationProvider>(context, listen: false);
+              final success = await prov.verifyPickupOtp(donationId, otp);
+              if (!mounted) return;
+              if (success) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${context.tr('confirm')}! 🎉'),
+                    backgroundColor: AppTheme.primaryGreen,
+                  ),
+                );
+                _loadData();
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(prov.errorMessage != null ? context.trError(prov.errorMessage!) : 'Failed to verify OTP'),
+                    backgroundColor: AppTheme.error,
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryGreen),
+            child: Text(context.tr('confirm')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleRequestVolunteer(int donationId) async {
+    final prov = Provider.of<DonationProvider>(context, listen: false);
+    final ok = await prov.requestVolunteer(donationId);
     if (!mounted) return;
     if (ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.tr('pass'))),
+        SnackBar(
+          content: Text('${context.tr('volunteer_being_arranged')} 🚴'),
+          backgroundColor: AppTheme.primaryGreen,
+        ),
       );
       _loadData();
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(prov.errorMessage != null ? context.trError(prov.errorMessage!) : context.trError('err_server')),
+          backgroundColor: AppTheme.error,
+        ),
+      );
     }
   }
 
@@ -276,7 +533,21 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
     final ngoProv = Provider.of<NgoProvider>(context);
     final isPendingVerification = (ngoProv.myNgo != null && !ngoProv.myNgo!.isVerified);
     if (isPendingVerification) {
-      return _buildVerificationPendingScreen(context, user);
+      final authProv = Provider.of<AuthProvider>(context, listen: false);
+      final orgName = ngoProv.myNgo?.organizationName ?? authProv.currentUser?.name ?? 'Your Organisation';
+      return NgoVerificationPendingScreen(
+        organisationName: orgName,
+        onLogout: () async {
+          await authProv.logout();
+          if (context.mounted) context.go('/login');
+        },
+        onRefreshStatus: () async {
+          await ngoProv.fetchMyNgo();
+          if (ngoProv.isVerified) {
+            _loadData();
+          }
+        },
+      );
     }
 
     return Scaffold(
@@ -501,8 +772,94 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
         final isAvailable = tabIndex == 0;
         final isCollected = item.status.toLowerCase() == 'collected';
 
+        Widget? trailingAction;
+        if (isAvailable) {
+          trailingAction = null;
+        } else if (tabIndex == 1) {
+          if (item.pickupMode == 'self_pickup') {
+            if (item.status.toLowerCase() == 'accepted') {
+              trailingAction = ElevatedButton.icon(
+                onPressed: () => _showVerifyOtpDialog(item.id),
+                icon: const Icon(Icons.qr_code, size: 16),
+                label: Text(context.tr('action_verify_donor_otp')),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
+                ),
+              );
+            } else if (isCollected) {
+              trailingAction = ElevatedButton.icon(
+                onPressed: () => context.push('/ngo/receiving/${item.id}'),
+                icon: const Icon(Icons.check, size: 16),
+                label: Text(context.tr('confirm')),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
+                ),
+              );
+            }
+          } else if (item.pickupMode == 'donor_dropoff' || item.status.toLowerCase() == 'donor_dropoff') {
+            trailingAction = ElevatedButton.icon(
+              onPressed: () => context.push('/ngo/receiving/${item.id}'),
+              icon: const Icon(Icons.check_circle_outline, size: 16),
+              label: Text(context.tr('confirm')),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryGreen,
+                padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
+              ),
+            );
+          } else {
+            if (isCollected) {
+              trailingAction = ElevatedButton.icon(
+                onPressed: () => context.push('/ngo/receiving/${item.id}'),
+                icon: const Icon(Icons.check, size: 16),
+                label: Text(context.tr('confirm')),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.primaryGreen,
+                  padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
+                ),
+              );
+            }
+          }
+        } else if (tabIndex == 2) {
+          if (item.status.toLowerCase() == 'delivered') {
+            trailingAction = ElevatedButton.icon(
+              onPressed: () => context.push('/ngo/distribution/${item.id}'),
+              icon: const Icon(Icons.restaurant_outlined, size: 16),
+              label: Text(context.tr('distribute_meals')),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryGreen,
+                padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
+              ),
+            );
+          }
+        }
+
         return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (isAvailable && item.quantity <= 15) ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryGreen.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.info_outline, size: 14, color: AppTheme.primaryGreen),
+                    const SizedBox(width: 6),
+                    Text(
+                      context.tr('small_donation_pref'),
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primaryGreen),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             DonationCard(
               donation: item,
               currentRole: 'ngo',
@@ -514,29 +871,42 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
               acceptLabel: context.tr('accept_rescue'),
               rejectLabel: context.tr('pass'),
               onTap: () => context.push('/donor/detail/${item.id}'),
-              onAccept: isAvailable ? () => _showAcceptMethodSheet(item.id, item.foodName) : null,
-              onReject: isAvailable ? () => _handleReject(item.id) : null,
-              trailingAction: isCollected
-                  ? ElevatedButton.icon(
-                      onPressed: () => context.push('/ngo/receiving/${item.id}'),
-                      icon: const Icon(Icons.check, size: 16),
-                      label: Text(context.tr('confirm')),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.primaryGreen,
-                        padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
+              onAccept: isAvailable ? () => _showAcceptMethodSheet(item.id, item.foodName, item.quantity) : null,
+              onReject: isAvailable ? () => _showRejectReasonSheet(item.id, item.foodName) : null,
+              trailingAction: trailingAction,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: AppTheme.space8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (isAvailable) ...[
+                    TextButton.icon(
+                      onPressed: () => _shareViaWhatsApp(context, item),
+                      icon: const Icon(Icons.share, size: 15, color: AppTheme.primaryGreen),
+                      label: Text(
+                        context.tr('share_rescue_btn'),
+                        style: const TextStyle(fontSize: 12, color: AppTheme.primaryGreen, fontWeight: FontWeight.w600),
                       ),
-                    )
-                  : item.status.toLowerCase() == 'delivered'
-                      ? ElevatedButton.icon(
-                          onPressed: () => context.push('/ngo/distribution/${item.id}'),
-                          icon: const Icon(Icons.restaurant_outlined, size: 16),
-                          label: Text(context.tr('distribute_meals')),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primaryGreen,
-                            padding: const EdgeInsets.symmetric(horizontal: AppTheme.space12, vertical: AppTheme.space8),
-                          ),
-                        )
-                      : null,
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  TextButton.icon(
+                    onPressed: () => showDialog(
+                      context: context,
+                      builder: (_) => ReportProblemDialog(
+                        donationId: item.id,
+                        currentRole: 'ngo',
+                      ),
+                    ),
+                    icon: const Icon(Icons.flag_outlined, size: 15, color: AppTheme.textSecondary),
+                    label: Text(
+                      context.tr('report_issue_title'),
+                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
             ),
             if (isAvailable) ...[
               Padding(
@@ -553,37 +923,191 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
             ] else if (tabIndex == 1) ...[
               Padding(
                 padding: const EdgeInsets.only(bottom: AppTheme.space12),
-                child: Container(
-                  padding: const EdgeInsets.all(AppTheme.space12),
-                  decoration: BoxDecoration(
-                    color: AppTheme.surfaceWarm,
-                    borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
-                    border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
-                  ),
-                  child: Row(
+                child: item.pickupMode == 'self_pickup'
+                    ? Container(
+                        padding: const EdgeInsets.all(AppTheme.space12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryGreen.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                          border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.directions_car, color: AppTheme.primaryGreen, size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    context.tr('self_pickup_in_progress'),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (item.status.toLowerCase() == 'accepted') ...[
+                              const SizedBox(height: 8),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton.icon(
+                                  onPressed: () => _handleRequestVolunteer(item.id),
+                                  icon: const Icon(Icons.delivery_dining, size: 14),
+                                  label: Text(
+                                    context.tr('request_volunteer_switch'),
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: AppTheme.secondaryTerracotta,
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      )
+                    : (item.pickupMode == 'donor_dropoff' || item.status.toLowerCase() == 'donor_dropoff')
+                        ? Container(
+                            padding: const EdgeInsets.all(AppTheme.space12),
+                            decoration: BoxDecoration(
+                              color: AppTheme.info.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                              border: Border.all(color: AppTheme.info.withValues(alpha: 0.3)),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.volunteer_activism, color: AppTheme.info, size: 18),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    context.tr('donor_dropoff_in_progress'),
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.info),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : Container(
+                            padding: const EdgeInsets.all(AppTheme.space12),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceWarm,
+                              borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                              border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  item.status.toLowerCase() == 'accepted'
+                                      ? Icons.hourglass_top_rounded
+                                      : item.status.toLowerCase() == 'volunteer_assigned'
+                                          ? Icons.person_pin_circle_outlined
+                                          : Icons.directions_bike_rounded,
+                                  color: AppTheme.primaryGreen,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    item.status.toLowerCase() == 'accepted'
+                                        ? context.tr('volunteer_being_arranged')
+                                        : item.status.toLowerCase() == 'volunteer_assigned'
+                                            ? '${context.tr('assigned_volunteer')}: ${item.volunteerName ?? ''}'
+                                            : item.currentEtaMinutes != null
+                                                ? '${context.tr('volunteer_on_the_way')}: ${item.volunteerName ?? ''} (ETA: ${item.currentEtaMinutes!.toInt()} min)'
+                                                : '${context.tr('volunteer_on_the_way')}: ${item.volunteerName ?? ''}',
+                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                                  ),
+                                ),
+                                if (item.isRematched)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.info.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Text(
+                                      context.tr('status_rematched'),
+                                      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.info),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppTheme.space12),
+                child: Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: AppTheme.space12),
+                    backgroundColor: AppTheme.card,
+                    collapsedBackgroundColor: AppTheme.card,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                      side: const BorderSide(color: AppTheme.border),
+                    ),
+                    collapsedShape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                      side: const BorderSide(color: AppTheme.border),
+                    ),
+                    leading: const Icon(Icons.timeline, color: AppTheme.primaryGreen, size: 18),
+                    title: Text(
+                      context.tr('rescue_window'),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                    ),
+                    subtitle: Text(
+                      '${context.tr('status')}: ${context.trStatus(item.status)}',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    ),
                     children: [
-                      const Icon(Icons.directions_bike_rounded, color: AppTheme.primaryGreen, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          item.currentEtaMinutes != null
-                              ? '${context.tr('ngo_arrival_eta')}: ${item.currentEtaMinutes!.toInt()} min (${context.tr('tracking_eta_label')})'
-                              : '${context.tr('assigned_volunteer')}: ${item.volunteerName ?? context.tr("in_progress")}',
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                      Padding(
+                        padding: const EdgeInsets.all(AppTheme.space12),
+                        child: DonationStatusTimeline(
+                          status: item.status,
+                          pickupMode: item.pickupMode,
                         ),
                       ),
-                      if (item.isRematched)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: AppTheme.info.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            context.tr('status_rematched'),
-                            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.info),
-                          ),
+                    ],
+                  ),
+                ),
+              ),
+            ] else if (tabIndex == 2) ...[
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppTheme.space12),
+                child: Theme(
+                  data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                  child: ExpansionTile(
+                    tilePadding: const EdgeInsets.symmetric(horizontal: AppTheme.space12),
+                    backgroundColor: AppTheme.card,
+                    collapsedBackgroundColor: AppTheme.card,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                      side: const BorderSide(color: AppTheme.border),
+                    ),
+                    collapsedShape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                      side: const BorderSide(color: AppTheme.border),
+                    ),
+                    leading: const Icon(Icons.done_all, color: AppTheme.primaryGreen, size: 18),
+                    title: Text(
+                      context.tr('status_delivered'),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                    ),
+                    subtitle: Text(
+                      '${context.tr('status')}: ${context.trStatus(item.status)}',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    ),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(AppTheme.space12),
+                        child: DonationStatusTimeline(
+                          status: item.status,
+                          pickupMode: item.pickupMode,
                         ),
+                      ),
                     ],
                   ),
                 ),
@@ -629,125 +1153,6 @@ class _NgoDashboardScreenState extends State<NgoDashboardScreen> {
           ],
         ),
       ),
-    );
-  }
-
-  /// N1 Verification Pending Screen (No rescue actions available)
-  Widget _buildVerificationPendingScreen(BuildContext context, dynamic user) {
-    return Scaffold(
-      backgroundColor: AppTheme.background,
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              user?.name ?? context.tr('role_ngo'),
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              overflow: TextOverflow.ellipsis,
-            ),
-            Row(
-              children: [
-                const Icon(Icons.hourglass_empty, size: 13, color: AppTheme.urgentAmber),
-                const SizedBox(width: 4),
-                Text(
-                  context.tr('status_pending'),
-                  style: const TextStyle(fontSize: 11, color: AppTheme.urgentAmber, fontWeight: FontWeight.w600),
-                ),
-              ],
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: context.tr('refresh'),
-            onPressed: _loadData,
-          ),
-          IconButton(
-            icon: const Icon(Icons.account_circle_outlined),
-            onPressed: () => context.push('/profile'),
-          ),
-        ],
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: AppTheme.space24, vertical: AppTheme.space32),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Container(
-                width: 96,
-                height: 96,
-                decoration: BoxDecoration(
-                  color: AppTheme.urgentAmber.withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: AppTheme.urgentAmber.withValues(alpha: 0.3), width: 2),
-                ),
-                child: const Icon(
-                  Icons.verified_user_outlined,
-                  size: 48,
-                  color: AppTheme.urgentAmber,
-                ),
-              ),
-              const SizedBox(height: AppTheme.space24),
-              Text(
-                context.tr('verification_pending_title'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimary,
-                  height: 1.3,
-                ),
-              ),
-              const SizedBox(height: AppTheme.space12),
-              Text(
-                context.tr('verification_pending_desc'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 15,
-                  color: AppTheme.textSecondary,
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: AppTheme.space32),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (ctx) => AlertDialog(
-                        title: Text(context.tr('support_dialog_title')),
-                        content: Text(context.tr('support_dialog_desc')),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(ctx),
-                            child: Text(context.tr('close')),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.support_agent, color: Colors.white),
-                  label: Text(
-                    context.tr('contact_support').toUpperCase(),
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 0.5),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.trustTeal,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-      bottomNavigationBar: const RoleBottomNav(currentRole: 'ngo', currentIndex: 0),
     );
   }
 }

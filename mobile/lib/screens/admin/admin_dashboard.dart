@@ -57,6 +57,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       return isCritical || isNearExpiryNoVolunteer || isDelayed || isFailed || hasMismatch || hasIssues || needsInspection;
     }).toList();
 
+    // Sort critical and urgent exceptions first (Section 3)
+    needsAttentionItems.sort((a, b) {
+      final aCrit = a.rescueUrgencyLevel.toUpperCase() == 'CRITICAL' ? 0 : (a.rescueUrgencyLevel.toUpperCase() == 'URGENT' ? 1 : 2);
+      final bCrit = b.rescueUrgencyLevel.toUpperCase() == 'CRITICAL' ? 0 : (b.rescueUrgencyLevel.toUpperCase() == 'URGENT' ? 1 : 2);
+      if (aCrit != bCrit) return aCrit.compareTo(bCrit);
+      final aRem = a.remainingMinutes ?? 999;
+      final bRem = b.remainingMinutes ?? 999;
+      return aRem.compareTo(bRem);
+    });
+
     // Filter active live rescues
     final liveRescues = items.where((d) =>
       ['accepted', 'assigned', 'on_the_way', 'arrived', 'collected', 'in_transit'].contains(d.status.toLowerCase())
@@ -148,7 +158,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final active = summary?.activeRescues ?? 0;
     final urgent = summary?.urgentRescues ?? 0;
     final atRisk = summary?.criticalRescues ?? 0;
-    final inTransit = summary?.inTransit ?? 0;
+    final completedToday = summary?.completedToday ?? 0;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -173,7 +183,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           _buildStripDivider(),
           _buildCompactMetricItem('$atRisk', context.tr('stat_at_risk'), AppTheme.error),
           _buildStripDivider(),
-          _buildCompactMetricItem('$inTransit', context.tr('stat_in_transit'), const Color(0xFF0284C7)),
+          _buildCompactMetricItem('$completedToday', context.tr('stat_completed_today'), const Color(0xFF0284C7)),
         ],
       ),
     );
@@ -333,28 +343,23 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     Color bannerColor = const Color(0xFFD97706); // Amber default
     String issueTag = context.tr('stat_urgent');
     String problemDesc = '';
-    String actionLabel = context.tr('btn_review');
 
     if (isCritical || (item.remainingMinutes != null && item.remainingMinutes! <= 20)) {
       bannerColor = AppTheme.error;
       issueTag = '🔴 ${context.tr('critical_rescue')}';
       problemDesc = noVolunteer ? context.tr('no_volunteer_assigned') : '${item.remainingMinutes ?? 15}m rescue window remaining';
-      actionLabel = context.tr('btn_intervene');
     } else if (isDelayed) {
       bannerColor = const Color(0xFFEA580C);
       issueTag = '🟠 ${context.tr('delivery_delayed')}';
       problemDesc = 'ETA (${item.etaMinutes?.toStringAsFixed(0)}m) exceeds advisory window (${item.remainingMinutes ?? 0}m)';
-      actionLabel = context.tr('btn_view');
     } else if (hasMismatch) {
       bannerColor = const Color(0xFFD97706);
       issueTag = '🟠 ${context.tr('quantity_mismatch')}';
       problemDesc = '${item.expectedQuantity.toStringAsFixed(0)} expected • ${item.receivedQuantity?.toStringAsFixed(0) ?? 0} received';
-      actionLabel = context.tr('btn_review');
     } else if (item.issueCount > 0) {
       bannerColor = const Color(0xFFEA580C);
       issueTag = '🟠 ${context.tr('nav_issues')} (${item.issueCount})';
       problemDesc = 'Participant reported operational concern';
-      actionLabel = context.tr('btn_review');
     } else {
       problemDesc = '${item.remainingMinutes ?? 30}m remaining';
     }
@@ -411,7 +416,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
                 const SizedBox(height: 8),
 
-                // Food Details & Problem Row
+                // Food Details & Metadata Row
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -420,26 +425,39 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '${item.foodName} • ${item.quantity.toStringAsFixed(0)} ${item.quantityUnit}',
+                            '${item.foodName} • ${item.quantity.toStringAsFixed(0)} ${context.trUnit(item.quantityUnit)}',
                             style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
                           ),
-                          const SizedBox(height: 3),
+                          const SizedBox(height: 2),
+                          Text(
+                            '#${item.id}',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+                          ),
+                          const SizedBox(height: 4),
                           Text(
                             problemDesc,
                             style: TextStyle(fontSize: 12, color: bannerColor, fontWeight: FontWeight.w600),
                           ),
-                          if (item.ngoName != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              'NGO: ${item.ngoName}',
-                              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
-                            ),
-                          ],
+                          const SizedBox(height: 6),
+                          Text(
+                            'Current stage: ${context.trStatus(item.status)}',
+                            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'NGO: ${item.ngoName ?? "Awaiting NGO response"}',
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Volunteer: ${item.volunteerName ?? "Awaiting volunteer"}',
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                          ),
                         ],
                       ),
                     ),
                     const SizedBox(width: 8),
-                    // Prominent Action Button
+                    // Prominent Primary Action: INTERVENE
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(
                         backgroundColor: bannerColor,
@@ -450,9 +468,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => AdminRescueDetailModal.show(context, item.id),
-                      child: Text(
-                        actionLabel,
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                      child: const Text(
+                        'INTERVENE',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                       ),
                     ),
                   ],
@@ -608,23 +626,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   String _getFriendlyStageText(String status) {
-    switch (status.toLowerCase()) {
-      case 'accepted':
-        return 'NGO Accepted';
-      case 'assigned':
-        return 'Courier Assigned';
-      case 'on_the_way':
-        return 'En Route to Donor';
-      case 'arrived':
-        return 'Arrived at Pickup';
-      case 'collected':
-      case 'in_transit':
-        return 'In Transit to NGO';
-      case 'delivered':
-        return 'Arrived at NGO';
-      default:
-        return status;
-    }
+    return context.trStatus(status);
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -907,6 +909,28 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 label: context.tr('verify_ngo_btn'),
                 color: const Color(0xFF7C3AED),
                 onTap: () => context.push('/admin/verify-ngos'),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: _buildQuickActionTile(
+                icon: Icons.analytics_outlined,
+                label: context.tr('monthly_impact_report'),
+                color: const Color(0xFF0D9488),
+                onTap: () => context.push('/admin/monthly-report'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildQuickActionTile(
+                icon: Icons.history_edu_outlined,
+                label: context.tr('auditable_history'),
+                color: const Color(0xFF4F46E5),
+                onTap: () => context.push('/admin/audit-logs'),
               ),
             ),
           ],

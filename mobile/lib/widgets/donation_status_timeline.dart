@@ -7,6 +7,7 @@ import '../core/theme/app_theme.dart';
 class DonationStatusTimeline extends StatelessWidget {
   final String status;
   final String? failureReason;
+  final String pickupMode;
   final DateTime? createdAt;
   final DateTime? acceptedAt;
   final DateTime? collectedAt;
@@ -16,6 +17,7 @@ class DonationStatusTimeline extends StatelessWidget {
     super.key,
     required this.status,
     this.failureReason,
+    this.pickupMode = 'volunteer_dispatch',
     this.createdAt,
     this.acceptedAt,
     this.collectedAt,
@@ -53,14 +55,24 @@ class DonationStatusTimeline extends StatelessWidget {
     final isTerminal = ['cancelled', 'expired', 'rejected', 'pickup_failed', 'delivery_failed'].contains(normStatus);
     final currentIndex = _getCurrentStepIndex(normStatus);
 
-    final steps = [
-      {'title': 'Donation Created', 'sub': 'Surplus food posted with AI assessment'},
-      {'title': 'NGO Accepted', 'sub': 'Receiving capacity reserved with concurrency lock'},
-      {'title': 'Volunteer Assigned', 'sub': 'Courier transit matched to vehicle capacity'},
-      {'title': 'Food Picked Up', 'sub': 'OTP / QR handover verified at donor location'},
-      {'title': 'Food Delivered', 'sub': 'Safe transit completed to NGO facility'},
-      {'title': 'Completed & Distributed', 'sub': 'Beneficiary distribution logged & verified'},
-    ];
+    final isSelfPickup = pickupMode == 'self_pickup';
+    final steps = isSelfPickup
+        ? [
+            {'title': 'Donation Created', 'sub': 'Surplus food posted with AI assessment'},
+            {'title': 'NGO Accepted', 'sub': 'Direct self-pickup selected by NGO'},
+            {'title': 'NGO En Route', 'sub': 'NGO representative collecting surplus food'},
+            {'title': 'Food Picked Up', 'sub': 'Donor OTP verified by NGO at donor location'},
+            {'title': 'Food Received', 'sub': 'Food safely arrived at NGO facility'},
+            {'title': 'Completed & Distributed', 'sub': 'Beneficiary distribution logged & verified'},
+          ]
+        : [
+            {'title': 'Donation Created', 'sub': 'Surplus food posted with AI assessment'},
+            {'title': 'NGO Accepted', 'sub': 'Receiving capacity reserved with concurrency lock'},
+            {'title': 'Volunteer Assigned', 'sub': 'Courier transit matched to vehicle capacity'},
+            {'title': 'Food Picked Up', 'sub': 'OTP / QR handover verified at donor location'},
+            {'title': 'Food Delivered', 'sub': 'Safe transit completed to NGO facility'},
+            {'title': 'Completed & Distributed', 'sub': 'Beneficiary distribution logged & verified'},
+          ];
 
     return Container(
       padding: const EdgeInsets.all(AppTheme.space16),

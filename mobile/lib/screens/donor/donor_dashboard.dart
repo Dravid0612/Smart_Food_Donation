@@ -60,9 +60,8 @@ class _DonorDashboardScreenState extends State<DonorDashboardScreen> {
     final completedList = donations.where((d) => ['completed', 'delivered'].contains(d.status.toLowerCase())).toList();
     final totalMealsRescued = impact?.mealsRescued ?? completedList.fold<double>(0.0, (sum, d) => sum + d.quantity);
     final wasteKgPrevented = (impact?.estimatedWasteDivertedKg ?? (totalMealsRescued * 0.45)).toStringAsFixed(1);
+    final estimatedCostAvoided = impact?.estimatedValuePreservedInr ?? (totalMealsRescued * 45.0);
     final activeDonations = donations.where((d) => !['completed', 'delivered', 'cancelled', 'expired'].contains(d.status.toLowerCase())).toList();
-
-    final isFirstTimeDonor = donations.isEmpty;
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -255,70 +254,142 @@ class _DonorDashboardScreenState extends State<DonorDashboardScreen> {
               ),
               const SizedBox(height: AppTheme.space16),
 
-              if (!isFirstTimeDonor)
-                // Repeat Donor Hero Impact Summary Card
-                Container(
+              // ── SLIM IMPACT STRIP (COMPACT SINGLE ROW) ────────────────────
+              InkWell(
+                onTap: () => context.push('/donor/impact'),
+                borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                child: Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(AppTheme.space16),
+                  padding: const EdgeInsets.symmetric(horizontal: AppTheme.space14, vertical: AppTheme.space12),
                   decoration: BoxDecoration(
                     color: AppTheme.card,
-                    borderRadius: BorderRadius.circular(AppTheme.radiusFeatureCard),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusCard),
                     border: Border.all(color: AppTheme.border),
                     boxShadow: AppTheme.shadowCard,
                   ),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.workspace_premium, color: Colors.amber, size: 20),
-                              const SizedBox(width: 6),
+                              const Icon(Icons.insights_rounded, size: 14, color: AppTheme.primaryGreen),
+                              const SizedBox(width: 4),
                               Text(
-                                impact?.recognitionLevel ?? context.tr('verified_partner').toUpperCase(),
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                                context.tr('impact_summary').toUpperCase(),
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.primaryGreen,
+                                  letterSpacing: 0.5,
+                                ),
                               ),
                             ],
                           ),
-                          TextButton(
-                            onPressed: () => context.push('/donor/impact'),
-                            child: Text('${context.tr('impact_dashboard')} →', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primaryGreen.withValues(alpha: 0.08),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              context.tr('estimated_tag'),
+                              style: const TextStyle(
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.primaryGreen,
+                              ),
+                            ),
                           ),
                         ],
                       ),
-                      const Divider(height: 16),
+                      const SizedBox(height: 8),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceAround,
                         children: [
-                          _buildImpactMetric('${totalMealsRescued.toInt()}', context.tr('meals_rescued'), Icons.check_circle_outline, AppTheme.primaryGreen),
-                          Container(height: 36, width: 1, color: AppTheme.border),
-                          _buildImpactMetric('$wasteKgPrevented kg', context.tr('co2_saved'), Icons.eco, AppTheme.success),
-                          Container(height: 36, width: 1, color: AppTheme.border),
-                          _buildImpactMetric('${impact?.successfulRescuesCount ?? completedList.length}', context.tr('completed_donations'), Icons.task_alt, AppTheme.secondaryTerracotta),
+                          _buildImpactMetric(
+                            '${totalMealsRescued.toInt()}',
+                            context.tr('meals_rescued'),
+                            Icons.restaurant_rounded,
+                            AppTheme.primaryGreen,
+                          ),
+                          Container(height: 28, width: 1, color: AppTheme.border),
+                          _buildImpactMetric(
+                            '$wasteKgPrevented kg',
+                            context.tr('waste_prevented'),
+                            Icons.eco_rounded,
+                            AppTheme.success,
+                          ),
+                          Container(height: 28, width: 1, color: AppTheme.border),
+                          _buildImpactMetric(
+                            '₹${estimatedCostAvoided.toInt()}',
+                            context.tr('cost_avoided'),
+                            Icons.savings_outlined,
+                            AppTheme.secondaryTerracotta,
+                          ),
                         ],
                       ),
-                      const SizedBox(height: AppTheme.space16),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 48,
-                        child: ElevatedButton.icon(
-                          onPressed: () => context.push('/donor/create'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primaryGreen,
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
-                          ),
-                          icon: const Icon(Icons.add_circle, size: 20),
-                          label: Text('+ ${context.tr('donate_now')}', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppTheme.space16),
+
+              // ── WASTE PREVENTION INSIGHT (SHOWN ONLY IF >= 3 COMPLETED) ───
+              if (completedList.length >= 3) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(AppTheme.space14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0FDF4),
+                    borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                    border: Border.all(color: const Color(0xFFBBF7D0), width: 1.2),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primaryGreen.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.lightbulb_outline_rounded, color: AppTheme.primaryGreen, size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              context.tr('waste_prevention_insight'),
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF166534),
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              context.tr('waste_insight_desc', {
+                                'count': completedList.length,
+                                'avg': ((double.tryParse(wasteKgPrevented) ?? (totalMealsRescued * 0.45)) / completedList.length).toStringAsFixed(1),
+                              }),
+                              style: const TextStyle(
+                                fontSize: 11.5,
+                                color: Color(0xFF14532D),
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
                 ),
-
-              const SizedBox(height: AppTheme.space20),
+                const SizedBox(height: AppTheme.space16),
+              ],
 
               // ── 1.5. PROACTIVE TIME-CRITICAL RESCUE ALERT BANNER ──────────────
               ...(() {

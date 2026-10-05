@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.db.session import get_db
 from app.schemas.schemas import UserCreate, UserLogin, UserResponse, Token, RefreshRequest
 from app.models.models import User, NGO, Reward
+from app.core.config import settings
 from app.core.security import (
     hash_password, verify_password, create_access_token,
     create_refresh_token, decode_refresh_token, hash_token_for_storage
@@ -20,10 +21,27 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
-    if user_in.role.lower() == "admin":
+    role_norm = user_in.role.lower().strip()
+    allowed_roles = ["donor", "ngo", "volunteer", "admin"]
+    if role_norm not in allowed_roles:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Public admin registration is not permitted. Admin accounts must be provisioned internally."
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid role '{user_in.role}'. Allowed roles: {', '.join(allowed_roles)}."
+        )
+
+    # 1. Controlled Admin Creation check
+    if role_norm == "admin":
+        if not user_in.admin_secret or user_in.admin_secret != settings.ADMIN_PROVISIONING_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Public admin registration is not permitted. Admin accounts require authorized setup credentials."
+            )
+
+    # 2. Validation checks
+    if len(user_in.password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long."
         )
 
     existing_user = db.query(User).filter(User.email == user_in.email).first()
@@ -33,6 +51,30 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
             detail="Email is already registered."
         )
 
+    if user_in.phone:
+        existing_phone = db.query(User).filter(User.phone == user_in.phone).first()
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Phone number is already registered."
+            )
+
+    if role_norm == "volunteer":
+        allowed_vehicles = ["walking", "bike", "car", "van"]
+        if user_in.vehicle_type and user_in.vehicle_type.lower() not in allowed_vehicles:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid vehicle type '{user_in.vehicle_type}'. Allowed: {', '.join(allowed_vehicles)}."
+            )
+
+    if role_norm == "ngo":
+        org_name = user_in.organization_name or user_in.name
+        if not org_name or not org_name.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Organization name is required for NGO registration."
+            )
+
     hashed_pwd = hash_password(user_in.password)
 
     new_user = User(
@@ -40,12 +82,13 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
         email=user_in.email,
         password_hash=hashed_pwd,
         phone=user_in.phone,
-        role=user_in.role.lower(),
+        role=role_norm,
         address=user_in.address,
         latitude=user_in.latitude,
         longitude=user_in.longitude,
-        vehicle_type=user_in.vehicle_type if user_in.role.lower() == "volunteer" else "bike",
-        carrying_capacity=user_in.carrying_capacity if user_in.role.lower() == "volunteer" else 50
+        vehicle_type=user_in.vehicle_type if role_norm == "volunteer" else "bike",
+        carrying_capacity=user_in.carrying_capacity if role_norm == "volunteer" else 50,
+        is_active=False if role_norm == "volunteer" else True
     )
     db.add(new_user)
     db.commit()
@@ -62,6 +105,8 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
             capacity=user_in.capacity or 100,
             current_capacity=user_in.capacity or 100,
             contact_phone=user_in.phone,
+            operating_hours=user_in.operating_hours,
+            demand_requirements=user_in.demand_requirements,
             is_verified=False
         )
         db.add(ngo_profile)
@@ -101,7 +146,7 @@ def login(user_in: UserLogin, request: Request, db: Session = Depends(get_db)):
             detail="Invalid credentials."
         )
 
-    if not user.is_active:
+    if not user.is_active and user.role != "volunteer":
         log_audit_event(
             db, action="login_blocked_inactive",
             user_id=user.id,
@@ -177,7 +222,7 @@ def refresh_access_token(refresh_req: RefreshRequest, db: Session = Depends(get_
             detail="Refresh token has been revoked. Please log in again."
         )
 
-    if not user.is_active:
+    if not user.is_active and user.role != "volunteer":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is inactive. Please contact the platform administrator."

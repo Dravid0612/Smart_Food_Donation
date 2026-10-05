@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:dio/dio.dart';
+import '../../core/api/api_client.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/donation_provider.dart';
@@ -57,7 +59,8 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
   final String _handlingStatus = 'No';
 
   // Step 4: Photo / AI Visual Condition
-  XFile? _pickedImage;
+  final List<XFile> _pickedImages = [];
+  bool _isAnalyzing = false;
   String _aiCondition = 'GOOD';
   double _aiConfidence = 0.88;
   String _aiSpoilage = 'Not detected';
@@ -308,15 +311,59 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
+    if (_pickedImages.length >= 3) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.tr('max_photos_reached'))),
+      );
+      return;
+    }
     final picker = ImagePicker();
     final image = await picker.pickImage(source: source, imageQuality: 80);
     if (image != null && mounted) {
       setState(() {
-        _pickedImage = image;
-        _aiCondition = 'GOOD';
-        _aiConfidence = 0.91;
-        _aiSpoilage = 'Not detected';
+        _pickedImages.add(image);
       });
+      _runAiAnalysis();
+    }
+  }
+
+  Future<void> _runAiAnalysis() async {
+    if (_pickedImages.isEmpty) return;
+    setState(() => _isAnalyzing = true);
+    try {
+      final multipartList = <MultipartFile>[];
+      for (final f in _pickedImages) {
+        if (File(f.path).existsSync()) {
+          multipartList.add(await MultipartFile.fromFile(
+            f.path,
+            filename: f.path.split(Platform.pathSeparator).last,
+          ));
+        }
+      }
+      final formData = FormData.fromMap({
+        'images': multipartList,
+        if (multipartList.isNotEmpty) 'image': multipartList.first,
+        'food_category': _selectedCategory,
+        'food_type': _selectedFoodType,
+        'quantity': _quantityValue,
+        'storage_method': _storageMethod,
+        'preparation_time': _prepTime.toIso8601String(),
+      });
+      final apiClient = ApiClient();
+      final response = await apiClient.dio.post('/ai/analyze-food', data: formData);
+      final data = response.data as Map<String, dynamic>;
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+          _aiCondition = (data['visual_condition'] as String? ?? 'GOOD').toUpperCase();
+          _aiConfidence = (data['confidence'] as num?)?.toDouble() ?? 0.88;
+          _aiSpoilage = data['visible_spoilage'] as String? ?? (_aiCondition == 'POOR' ? 'Visible signs detected' : 'Not detected');
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isAnalyzing = false);
+      }
     }
   }
 
@@ -1271,38 +1318,122 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
         ),
         const SizedBox(height: AppTheme.space16),
 
-        GestureDetector(
-          onTap: () => _pickImage(ImageSource.camera),
-          child: Container(
-            height: 140,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              color: AppTheme.card,
-              borderRadius: BorderRadius.circular(AppTheme.radiusCard),
-              border: Border.all(color: AppTheme.border),
+        // Multi-Photo Capture (1 to 3 images)
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              context.tr('photos_taken', {'count': _pickedImages.length}),
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
             ),
-            child: _pickedImage != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(AppTheme.radiusCard),
-                    child: Image.file(File(_pickedImage!.path), fit: BoxFit.cover),
-                  )
-                : Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
+            if (_pickedImages.length < 3)
+              TextButton.icon(
+                onPressed: () => _pickImage(ImageSource.camera),
+                icon: const Icon(Icons.add_a_photo, size: 16, color: AppTheme.primaryGreen),
+                label: Text(context.tr('add_more_photos'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+
+        if (_pickedImages.isEmpty)
+          GestureDetector(
+            onTap: () => _pickImage(ImageSource.camera),
+            child: Container(
+              height: 140,
+              width: double.infinity,
+              decoration: BoxDecoration(
+                color: AppTheme.card,
+                borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(AppTheme.space12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryGreen.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.camera_alt, color: AppTheme.primaryGreen, size: 28),
+                  ),
+                  const SizedBox(height: AppTheme.space8),
+                  Text(context.tr('scan_or_camera'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 2),
+                  Text('Capture 1-3 photos from different angles', style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                ],
+              ),
+            ),
+          )
+        else
+          SizedBox(
+            height: 120,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _pickedImages.length + (_pickedImages.length < 3 ? 1 : 0),
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (ctx, idx) {
+                if (idx < _pickedImages.length) {
+                  final file = _pickedImages[idx];
+                  return Stack(
                     children: [
                       Container(
-                        padding: const EdgeInsets.all(AppTheme.space12),
+                        width: 120,
                         decoration: BoxDecoration(
-                          color: AppTheme.primaryGreen.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
+                          borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                          border: Border.all(color: AppTheme.border),
+                          image: DecorationImage(
+                            image: FileImage(File(file.path)),
+                            fit: BoxFit.cover,
+                          ),
                         ),
-                        child: const Icon(Icons.camera_alt, color: AppTheme.primaryGreen, size: 28),
                       ),
-                      const SizedBox(height: AppTheme.space8),
-                      Text(context.tr('ai_vision_analysis'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      Positioned(
+                        top: 4,
+                        right: 4,
+                        child: GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              _pickedImages.removeAt(idx);
+                            });
+                          },
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: Colors.black54,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.close, color: Colors.white, size: 14),
+                          ),
+                        ),
+                      ),
                     ],
-                  ),
+                  );
+                } else {
+                  return GestureDetector(
+                    onTap: () => _pickImage(ImageSource.camera),
+                    child: Container(
+                      width: 100,
+                      decoration: BoxDecoration(
+                        color: AppTheme.card,
+                        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                        border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.4)),
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.add_a_photo_outlined, color: AppTheme.primaryGreen, size: 24),
+                          const SizedBox(height: 4),
+                          Text(context.tr('add_more_photos'), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
           ),
-        ),
         const SizedBox(height: AppTheme.space16),
 
         Text(context.tr('packaging_condition'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
@@ -1355,6 +1486,11 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
                   ),
                 ],
               ),
+              if (_isAnalyzing)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8.0),
+                  child: LinearProgressIndicator(color: AppTheme.primaryGreen),
+                ),
               const Divider(height: 20),
               _buildAiRow(context.tr('visual_condition'), context.trVisual(_aiCondition), Icons.check_circle, AppTheme.success),
               _buildAiRow(context.tr('packaging_condition'), _packagingCondition, Icons.inventory_2_outlined, AppTheme.info),

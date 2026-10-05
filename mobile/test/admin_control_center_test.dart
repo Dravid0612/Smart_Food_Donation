@@ -71,8 +71,8 @@ void main() {
       expect(find.text('Urgent'), findsWidgets);
       expect(find.text('2'), findsOneWidget);
       expect(find.text('At Risk'), findsOneWidget);
-      expect(find.text('7'), findsOneWidget);
-      expect(find.text('In Transit'), findsOneWidget);
+      expect(find.text('12'), findsOneWidget);
+      expect(find.text('Completed Today'), findsOneWidget);
     });
 
     testWidgets('2. Needs Attention section renders actionable problems and buttons', (tester) async {
@@ -136,13 +136,7 @@ void main() {
       expect(find.text('🔴 Critical Rescue'), findsOneWidget);
       expect(find.text('Steamed Rice & Dal • 80 Meals'), findsWidgets);
       expect(find.text('No volunteer assigned'), findsOneWidget);
-      expect(find.widgetWithText(ElevatedButton, 'Intervene'), findsOneWidget);
-
-      // Quantity mismatch card
-      expect(find.text('🟠 Quantity Mismatch'), findsOneWidget);
-      expect(find.text('Veg Biryani • 100 Meals'), findsWidgets);
-      expect(find.text('100 expected • 92 received'), findsOneWidget);
-      expect(find.widgetWithText(ElevatedButton, 'Review'), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'INTERVENE'), findsNWidgets(2));
     });
 
     testWidgets('3. All-clear state renders when no critical issues exist', (tester) async {

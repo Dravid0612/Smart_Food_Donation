@@ -28,7 +28,8 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
   String? _otpError;
 
   // Sub-stages for volunteer courier workflow:
-  // 0: Assigned, 1: On the Way, 2: Arrived, 3: Picked Up, 4: Delivered
+  // 0: Accepted / Start Pickup, 1: On the Way, 2: Arrived at Donor, 3: Collected (Handover verified),
+  // 4: In Transit to NGO, 5: Arrived at NGO, 6: Delivered / Completed
   int _volunteerSubStage = 0;
 
   @override
@@ -41,10 +42,17 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
         if (!mounted) return;
         final item = donProv.currentDetail;
         if (item != null) {
-          if (['collected'].contains(item.status.toLowerCase())) {
+          final s = item.status.toLowerCase();
+          if (s == 'pickup_en_route' || s == 'en_route') {
+            setState(() => _volunteerSubStage = 1);
+          } else if (s == 'arrived_at_donor' || s == 'arrived') {
+            setState(() => _volunteerSubStage = 2);
+          } else if (s == 'collected') {
             setState(() => _volunteerSubStage = 3);
-          } else if (['delivered', 'completed'].contains(item.status.toLowerCase())) {
+          } else if (s == 'in_transit') {
             setState(() => _volunteerSubStage = 4);
+          } else if (['delivered', 'completed'].contains(s)) {
+            setState(() => _volunteerSubStage = 6);
           }
         }
       });
@@ -129,10 +137,18 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
   }
 
   void _showReportProblemDialog(BuildContext context, bool isPickup) {
-    String selectedReason = 'Donor unavailable';
-    final reasons = isPickup
-        ? ['Donor unavailable', 'Vehicle issue', 'Food unavailable', 'Incorrect address', 'Other']
-        : ['NGO unavailable', 'Vehicle issue', 'Refused by NGO', 'Accident / delay', 'Other'];
+    String selectedReason = 'Cannot find donor';
+    final reasons = [
+      'Cannot find donor',
+      'Donor unavailable',
+      'Vehicle problem',
+      'Road blocked',
+      'Food condition issue',
+      'Wrong quantity',
+      'Cannot locate NGO',
+      'Safety concern',
+      'Other',
+    ];
 
     showDialog(
       context: context,
@@ -213,14 +229,16 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
     setState(() => _isLoading = false);
 
     if (ok) {
-      setState(() => _volunteerSubStage = 4);
+      setState(() => _volunteerSubStage = 6);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('🎉 ${context.tr('status_delivered')}!'),
           backgroundColor: AppTheme.primaryGreen,
         ),
       );
-      context.go('/volunteer');
+      try {
+        context.go('/volunteer');
+      } catch (_) {}
     }
   }
 
@@ -390,15 +408,40 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    context.tr('stage_pickup_en_route'),
+                    context.tr('rescue_live_tracking'),
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
                   ),
                   const SizedBox(height: AppTheme.space12),
                   _buildTimelineItem(0, context.tr('status_accepted'), context.tr('assigned_volunteer')),
                   _buildTimelineItem(1, context.tr('stage_pickup_en_route'), context.tr('vol_action_start_pickup')),
                   _buildTimelineItem(2, context.tr('stage_arrived_at_donor'), context.tr('vol_action_verify_otp')),
-                  _buildTimelineItem(3, context.tr('stage_in_transit'), context.tr('vol_action_start_delivery')),
-                  _buildTimelineItem(4, context.tr('stage_delivered'), context.tr('status_completed'), isLast: true),
+                  _buildTimelineItem(3, 'Food Handover', 'Food collected from donor'),
+                  _buildTimelineItem(4, context.tr('stage_in_transit'), 'En route to NGO shelter'),
+                  _buildTimelineItem(5, 'Arrived at NGO', 'NGO arrival verified'),
+                  _buildTimelineItem(6, context.tr('stage_delivered'), context.tr('status_completed'), isLast: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppTheme.space16),
+
+            // Informational Food Safety Card (Section 31)
+            Container(
+              padding: const EdgeInsets.all(AppTheme.space12),
+              decoration: BoxDecoration(
+                color: Colors.blueGrey.shade50,
+                borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                border: Border.all(color: Colors.blueGrey.shade200),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.shield_outlined, size: 18, color: Colors.blueGrey),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Food Safety: Verify covered packaging before transit. Visual advisory check only — not legal advice.',
+                      style: TextStyle(fontSize: 11, color: Colors.blueGrey, height: 1.3),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -510,7 +553,6 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
           onPressed: () async {
             setState(() => _isLoading = true);
             await taskProv.startPickup(widget.donationId);
-            // Transmit volunteer location telemetry
             await donProv.updateVolunteerLocation(
               latitude: 12.9716,
               longitude: 77.5946,
@@ -525,26 +567,59 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
           },
         );
       case 1:
-        return PrimaryActionButton(
-          label: context.tr('action_arrived'),
-          icon: Icons.location_on,
-          backgroundColor: AppTheme.secondaryTerracotta,
-          isLoading: _isLoading,
-          onPressed: () async {
-            setState(() => _isLoading = true);
-            await taskProv.markArrived(widget.donationId);
-            await donProv.updateVolunteerLocation(
-              latitude: 12.9716,
-              longitude: 77.5946,
-              donationId: widget.donationId,
-            );
-            if (mounted) {
-              setState(() {
-                _isLoading = false;
-                _volunteerSubStage = 2;
-              });
-            }
-          },
+        return Column(
+          children: [
+            PrimaryActionButton(
+              label: context.tr('action_arrived'),
+              icon: Icons.location_on,
+              backgroundColor: AppTheme.secondaryTerracotta,
+              isLoading: _isLoading,
+              onPressed: () async {
+                setState(() => _isLoading = true);
+                await taskProv.markArrived(widget.donationId, method: 'gps');
+                await donProv.updateVolunteerLocation(
+                  latitude: 12.9716,
+                  longitude: 77.5946,
+                  donationId: widget.donationId,
+                );
+                if (mounted) {
+                  setState(() {
+                    _isLoading = false;
+                    _volunteerSubStage = 2;
+                  });
+                }
+              },
+            ),
+            const SizedBox(height: AppTheme.space8),
+            TextButton.icon(
+              onPressed: () async {
+                setState(() => _isLoading = true);
+                // Audited manual arrival fallback (Section 14)
+                await taskProv.markArrived(
+                  widget.donationId,
+                  method: 'manual_here',
+                  reason: 'GPS obstructed / indoor or basement loading area',
+                );
+                if (mounted) {
+                  setState(() {
+                    _isLoading = false;
+                    _volunteerSubStage = 2;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text("Arrival confirmed via 'I'm Here' fallback (Audited)."),
+                      backgroundColor: AppTheme.primaryGreen,
+                    ),
+                  );
+                }
+              },
+              icon: const Icon(Icons.pin_drop_outlined, size: 16, color: AppTheme.textSecondary),
+              label: const Text(
+                "GPS Inaccurate? Confirm Arrival with \"I'm Here\"",
+                style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+              ),
+            ),
+          ],
         );
       case 2:
         return PrimaryActionButton(
@@ -553,13 +628,64 @@ class _VolunteerActiveTaskScreenState extends State<VolunteerActiveTaskScreen> {
           onPressed: () => _showOtpModal(context),
         );
       case 3:
+        return Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(AppTheme.space12),
+              decoration: BoxDecoration(
+                color: AppTheme.primaryGreen.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: AppTheme.primaryGreen, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Food successfully collected from donor. Ready for transport to receiving NGO.',
+                      style: TextStyle(fontSize: 13, color: AppTheme.primaryGreen, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppTheme.space12),
+            PrimaryActionButton(
+              label: 'GO TO NGO / START TRANSIT',
+              icon: Icons.directions_run_outlined,
+              isLoading: _isLoading,
+              onPressed: () async {
+                setState(() => _isLoading = true);
+                await taskProv.startTransit(widget.donationId);
+                if (mounted) {
+                  setState(() {
+                    _isLoading = false;
+                    _volunteerSubStage = 4;
+                  });
+                }
+              },
+            ),
+          ],
+        );
+      case 4:
+        return PrimaryActionButton(
+          label: 'ARRIVED AT NGO',
+          icon: Icons.home_work_outlined,
+          backgroundColor: AppTheme.secondaryTerracotta,
+          isLoading: _isLoading,
+          onPressed: () {
+            setState(() => _volunteerSubStage = 5);
+          },
+        );
+      case 5:
         return PrimaryActionButton(
           label: context.tr('action_deliver'),
           icon: Icons.task_alt,
           isLoading: _isLoading,
           onPressed: _confirmDelivery,
         );
-      case 4:
+      case 6:
       default:
         return Column(
           children: [

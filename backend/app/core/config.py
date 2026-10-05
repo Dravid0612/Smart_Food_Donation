@@ -1,4 +1,13 @@
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load local environment variables from backend/.env or parent directories
+_env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(dotenv_path=_env_path)
+else:
+    load_dotenv()
 
 class Settings:
     PROJECT_NAME: str = "Smart Food Donation Platform"
@@ -18,6 +27,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))   # 30 minutes
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))        # 7 days
     REFRESH_TOKEN_SECRET: str = os.getenv("REFRESH_TOKEN_SECRET", "refresh-secret-sfd-2026-smart-food-platform")
+    ADMIN_PROVISIONING_SECRET: str = os.getenv("ADMIN_PROVISIONING_SECRET", "admin-setup-secret-2026")
 
     # OTP / QR validity window (hours) — configurable
     OTP_EXPIRE_HOURS: int = int(os.getenv("OTP_EXPIRE_HOURS", "6"))
@@ -43,11 +53,27 @@ class Settings:
     SMS_TEMPLATE_ID: str = os.getenv("SMS_TEMPLATE_ID", "")     # DLT template ID (India)
     SMS_WEBHOOK_SECRET: str = os.getenv("SMS_WEBHOOK_SECRET", "sms-webhook-secret-sfd-2026")
 
-    # ─── Firebase Cloud Messaging (FCM) ─────────────────────────────────────
-    # Set FCM_SERVER_KEY / FCM_PROJECT_ID to enable real push notifications.
+    # ─── Road Routing Provider ──────────────────────────────────────────────
+    # Options: heuristic | google | osrm
+    ROUTING_PROVIDER: str = os.getenv("ROUTING_PROVIDER", "heuristic").lower()
+    GOOGLE_MAPS_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY", os.getenv("ROUTING_API_KEY", ""))
+    ROUTING_TIMEOUT_SECONDS: float = float(os.getenv("ROUTING_TIMEOUT_SECONDS", "5.0"))
+
+    # ─── AI Vision Provider ─────────────────────────────────────────────────
+    # Options: gemini | local
+    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "gemini").lower()
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", os.getenv("GOOGLE_API_KEY", ""))
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    AI_TIMEOUT_SECONDS: float = float(os.getenv("AI_TIMEOUT_SECONDS", "10.0"))
+
+    # ─── Firebase Cloud Messaging (FCM HTTP v1) ─────────────────────────────
+    # Current FCM HTTP v1 uses OAuth 2.0 service account credentials.
+    # Set FCM_PROJECT_ID and GOOGLE_APPLICATION_CREDENTIALS (or FIREBASE_CREDENTIALS_PATH).
     # Default uses a mock adapter that logs but does NOT push to devices.
-    FCM_SERVER_KEY: str = os.getenv("FCM_SERVER_KEY", "")
     FCM_PROJECT_ID: str = os.getenv("FCM_PROJECT_ID", "")
+    GOOGLE_APPLICATION_CREDENTIALS: str = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", os.getenv("FIREBASE_CREDENTIALS_PATH", ""))
+    FIREBASE_CREDENTIALS_PATH: str = os.getenv("FIREBASE_CREDENTIALS_PATH", os.getenv("GOOGLE_APPLICATION_CREDENTIALS", ""))
+    FCM_SERVER_KEY: str = os.getenv("FCM_SERVER_KEY", "")  # Optional legacy fallback only
 
     # ─── Pickup OTP Settings ────────────────────────────────────────────────
     OTP_PICKUP_EXPIRE_MINUTES: int = int(os.getenv("OTP_PICKUP_EXPIRE_MINUTES", "5"))
@@ -56,5 +82,17 @@ class Settings:
     OTP_REGEN_WINDOW_MINUTES: int = int(os.getenv("OTP_REGEN_WINDOW_MINUTES", "10"))
     OTP_PHONE_VERIFY_MAX_PER_WINDOW: int = int(os.getenv("OTP_PHONE_VERIFY_MAX_PER_WINDOW", "3"))
     OTP_PHONE_VERIFY_WINDOW_MINUTES: int = int(os.getenv("OTP_PHONE_VERIFY_WINDOW_MINUTES", "15"))
+    # ─── API Optimization & Budget Controls ─────────────────────────────────
+    ROUTING_MIN_MOVEMENT_METERS: float = float(os.getenv("ROUTING_MIN_MOVEMENT_METERS", "500.0"))
+    ROUTING_CACHE_TTL_SECONDS: int = int(os.getenv("ROUTING_CACHE_TTL_SECONDS", "300"))
+    ROUTING_NON_ACTIVE_CACHE_TTL_SECONDS: int = int(os.getenv("ROUTING_NON_ACTIVE_CACHE_TTL_SECONDS", "900"))
+    ROUTING_MAX_CANDIDATES_PER_REMATCH: int = int(os.getenv("ROUTING_MAX_CANDIDATES_PER_REMATCH", "5"))
+
+    AI_PROVIDER_COOLDOWN_SECONDS: int = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "300"))
+    AI_MAX_TRANSIENT_RETRIES: int = int(os.getenv("AI_MAX_TRANSIENT_RETRIES", "1"))
+    AI_IMAGE_CACHE_TTL_SECONDS: int = int(os.getenv("AI_IMAGE_CACHE_TTL_SECONDS", "86400"))  # 24 hours
+
+    FCM_MAX_TRANSIENT_RETRIES: int = int(os.getenv("FCM_MAX_TRANSIENT_RETRIES", "1"))
 
 settings = Settings()
+

@@ -1,13 +1,65 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import 'package:go_router/go_router.dart';
 import '../../core/localization/app_locale.dart';
+import '../../core/models/auth_models.dart';
 import '../../core/theme/app_theme.dart';
-import '../../providers/auth_provider.dart';
+import '../../widgets/auth/app_text_field.dart';
+import '../../widgets/auth/auth_error_banner.dart';
+import '../../widgets/auth/role_selector.dart';
+
+/// Parameters collected on the registration screen and handed to
+/// [RegisterScreen.onRegister].
+class RegisterRequest {
+  final UserRole role;
+  final String name;
+  final String contact;
+  final String password;
+  final String extraField;
+  final String? phone;
+  final String? address;
+  final String? adminSecret;
+  final int? capacity;
+  final String? operatingHours;
+  final String? demandRequirements;
+
+  const RegisterRequest({
+    required this.role,
+    required this.name,
+    required this.contact,
+    required this.password,
+    required this.extraField,
+    this.phone,
+    this.address,
+    this.adminSecret,
+    this.capacity,
+    this.operatingHours,
+    this.demandRequirements,
+  });
+}
+
+class _VehicleOption {
+  final String key;
+  final String labelKey;
+  const _VehicleOption(this.key, this.labelKey);
+}
 
 class RegisterScreen extends StatefulWidget {
-  final String? initialRole;
-  const RegisterScreen({super.key, this.initialRole});
+  final Future<AuthResult> Function(RegisterRequest request) onRegister;
+
+  final String donorHomeRoute;
+  final String volunteerHomeRoute;
+  final String ngoPendingRoute;
+  final String adminHomeRoute;
+  final bool allowAdmin;
+
+  const RegisterScreen({
+    super.key,
+    required this.onRegister,
+    this.donorHomeRoute = '/donor',
+    this.volunteerHomeRoute = '/volunteer',
+    this.ngoPendingRoute = '/ngo/pending',
+    this.adminHomeRoute = '/admin',
+    this.allowAdmin = true,
+  });
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -16,332 +68,270 @@ class RegisterScreen extends StatefulWidget {
 class _RegisterScreenState extends State<RegisterScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
-  final _emailController = TextEditingController();
-  final _phoneController = TextEditingController();
+  final _contactController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
-  final _addressController = TextEditingController();
-  final _orgNameController = TextEditingController();
-  final _capacityController = TextEditingController(text: '100');
+  final _extraController = TextEditingController(); // business/org name or admin secret
 
-  String _selectedRole = 'donor'; // donor, ngo, volunteer
-  String _selectedVehicleType = 'bike'; // walking, bike, car, van
-  int _selectedCarryingCapacity = 50; // 10, 50, 150, 500
+  UserRole _role = UserRole.donor;
+  String _vehicleKey = 'bike';
+  bool _isSubmitting = false;
+  String? _errorMessage;
 
-  @override
-  void initState() {
-    super.initState();
-    if (widget.initialRole != null &&
-        ['donor', 'ngo', 'volunteer'].contains(widget.initialRole!.toLowerCase())) {
-      _selectedRole = widget.initialRole!.toLowerCase();
-    }
-  }
+  static const List<_VehicleOption> _vehicleOptions = [
+    _VehicleOption('walking', 'vehicle_walking'),
+    _VehicleOption('bike', 'vehicle_bike'),
+    _VehicleOption('car', 'vehicle_car'),
+    _VehicleOption('van', 'vehicle_van'),
+  ];
 
   @override
   void dispose() {
     _nameController.dispose();
-    _emailController.dispose();
-    _phoneController.dispose();
+    _contactController.dispose();
     _passwordController.dispose();
-    _confirmPasswordController.dispose();
-    _addressController.dispose();
-    _orgNameController.dispose();
-    _capacityController.dispose();
+    _extraController.dispose();
     super.dispose();
   }
 
-  Future<void> _handleRegister() async {
+  String get _extraLabel {
+    switch (_role) {
+      case UserRole.donor:
+        return AppLocale.t('business_name');
+      case UserRole.ngo:
+        return AppLocale.t('organisation_name');
+      case UserRole.volunteer:
+        return AppLocale.t('vehicle_type');
+      case UserRole.admin:
+        return AppLocale.t('admin_passkey');
+    }
+  }
+
+  Future<void> _submit() async {
+    setState(() => _errorMessage = null);
     if (!_formKey.currentState!.validate()) return;
 
-    if (_passwordController.text != _confirmPasswordController.text) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.tr('password_mismatch')), backgroundColor: AppTheme.error),
+    setState(() => _isSubmitting = true);
+    try {
+      final isEmail = _contactController.text.trim().contains('@');
+      final request = RegisterRequest(
+        role: _role,
+        name: _nameController.text.trim(),
+        contact: _contactController.text.trim(),
+        password: _passwordController.text,
+        extraField: _role == UserRole.volunteer
+            ? _vehicleKey
+            : _extraController.text.trim(),
+        phone: isEmail ? null : _contactController.text.trim(),
+        adminSecret: _role == UserRole.admin ? _extraController.text.trim() : null,
       );
-      return;
+      final result = await widget.onRegister(request);
+      if (!mounted) return;
+      _routeAfterRegister(result);
+    } on AuthException catch (e) {
+      setState(() => _errorMessage = e.message);
+    } catch (_) {
+      setState(
+          () => _errorMessage = AppLocale.t('network_error_register'));
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
+  }
 
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final success = await authProvider.register(
-      name: _nameController.text.trim(),
-      email: _emailController.text.trim(),
-      password: _passwordController.text,
-      phone: _phoneController.text.trim(),
-      role: _selectedRole,
-      address: _addressController.text.trim(),
-      organizationName: _selectedRole == 'ngo' ? _orgNameController.text.trim() : null,
-      capacity: _selectedRole == 'ngo' ? int.tryParse(_capacityController.text) ?? 100 : null,
-      vehicleType: _selectedRole == 'volunteer' ? _selectedVehicleType : null,
-      carryingCapacity: _selectedRole == 'volunteer' ? _selectedCarryingCapacity : null,
-    );
-
-    if (!mounted) return;
-
-    if (success) {
-      final role = authProvider.currentUser?.role ?? 'donor';
-      switch (role.toLowerCase()) {
-        case 'donor':
-          context.go('/donor');
-          break;
-        case 'ngo':
-          context.go('/ngo');
-          break;
-        case 'volunteer':
-          context.go('/volunteer');
-          break;
-        default:
-          context.go('/donor');
-      }
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.trError(authProvider.errorMessage ?? 'Registration failed')),
-          backgroundColor: AppTheme.error,
-        ),
-      );
+  void _routeAfterRegister(AuthResult result) {
+    final String route;
+    switch (result.role) {
+      case UserRole.donor:
+        route = widget.donorHomeRoute;
+        break;
+      case UserRole.volunteer:
+        route = widget.volunteerHomeRoute;
+        break;
+      case UserRole.ngo:
+        route = widget.ngoPendingRoute;
+        break;
+      case UserRole.admin:
+        route = widget.adminHomeRoute;
+        break;
     }
+    Navigator.of(context).pushNamedAndRemoveUntil(route, (r) => false);
   }
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = Provider.of<AuthProvider>(context);
-
-    return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
-      appBar: AppBar(
-        title: Text(context.tr('register')),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.go('/login'),
+    return ValueListenableBuilder<String>(
+      valueListenable: AppLocale.code,
+      builder: (context, _, __) => Scaffold(
+        appBar: AppBar(
+          backgroundColor: AppColors.leafMist,
+          elevation: 0,
+          iconTheme: const IconThemeData(color: AppColors.deepSabzi),
         ),
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  context.tr('join_mission'),
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF1E293B),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Form(
+              key: _formKey,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(AppLocale.t('create_account_title'),
+                      style: AppTextStyles.h1),
+                  const SizedBox(height: 4),
+                  Text(AppLocale.t('choose_role'),
+                      style: AppTextStyles.bodySmall),
+                  const SizedBox(height: 16),
+                  RoleSelector(
+                    selected: _role,
+                    onChanged: (role) => setState(() {
+                      _role = role;
+                      _extraController.clear();
+                    }),
+                    showAdmin: widget.allowAdmin,
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  context.tr('select_role'),
-                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 13),
-                ),
-                const SizedBox(height: 16),
-
-                // Role Selector Segmented Buttons
-                SegmentedButton<String>(
-                  segments: [
-                    ButtonSegment(value: 'donor', label: Text(context.trRole('donor')), icon: const Icon(Icons.volunteer_activism)),
-                    ButtonSegment(value: 'ngo', label: Text(context.trRole('ngo')), icon: const Icon(Icons.maps_home_work)),
-                    ButtonSegment(value: 'volunteer', label: Text(context.trRole('volunteer')), icon: const Icon(Icons.directions_bike)),
+                  const SizedBox(height: 20),
+                  if (_errorMessage != null) ...[
+                    AuthErrorBanner(message: _errorMessage!),
+                    const SizedBox(height: 12),
                   ],
-                  selected: {_selectedRole},
-                  onSelectionChanged: (Set<String> newSelection) {
-                    setState(() => _selectedRole = newSelection.first);
-                  },
-                ),
-                const SizedBox(height: 20),
-
-                // Notice for NGO
-                if (_selectedRole == 'ngo') ...[
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade50,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Colors.amber.shade300),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.verified_user_outlined, color: Color(0xFFB45309), size: 20),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            context.tr('why_verify'),
-                            style: const TextStyle(color: Color(0xFF92400E), fontSize: 12),
-                          ),
-                        ),
-                      ],
-                    ),
+                  AppTextField(
+                    label: AppLocale.t('full_name'),
+                    hint: AppLocale.t('full_name_hint'),
+                    controller: _nameController,
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? AppLocale.t('enter_name')
+                        : null,
                   ),
-                  const SizedBox(height: 16),
-                ],
-
-                // Name / Contact Name
-                TextFormField(
-                  controller: _nameController,
-                  decoration: InputDecoration(
-                    labelText: _selectedRole == 'donor'
-                        ? '${context.tr('full_name')} / ${context.tr('role_donor')}'
-                        : _selectedRole == 'ngo'
-                            ? '${context.tr('full_name')} (NGO)'
-                            : context.tr('full_name'),
-                    prefixIcon: const Icon(Icons.person_outline),
+                  const SizedBox(height: 14),
+                  AppTextField(
+                    label: AppLocale.t('phone_or_email'),
+                    hint: AppLocale.t('contact_hint'),
+                    controller: _contactController,
+                    keyboardType: TextInputType.emailAddress,
+                    validator: (v) => (v == null || v.trim().isEmpty)
+                        ? AppLocale.t('enter_contact')
+                        : null,
                   ),
-                  validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
-                ),
-                const SizedBox(height: 16),
-
-                // NGO Organization Name & Capacity
-                if (_selectedRole == 'ngo') ...[
-                  TextFormField(
-                    controller: _orgNameController,
-                    decoration: InputDecoration(
-                      labelText: '${context.tr('role_ngo')} ${context.tr('full_name')}',
-                      prefixIcon: const Icon(Icons.business),
-                    ),
-                    validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _capacityController,
-                    keyboardType: TextInputType.number,
-                    decoration: InputDecoration(
-                      labelText: '${context.tr('payload_capacity')} (${context.tr('unit_meals')})',
-                      prefixIcon: const Icon(Icons.storage),
-                    ),
-                    validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // Volunteer Vehicle & Capacity Fields
-                if (_selectedRole == 'volunteer') ...[
-                  DropdownButtonFormField<String>(
-                    initialValue: _selectedVehicleType,
-                    decoration: InputDecoration(
-                      labelText: context.tr('vehicle_type'),
-                      prefixIcon: const Icon(Icons.directions_car),
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: 'walking', child: Text('Walking / On Foot')),
-                      DropdownMenuItem(value: 'bike', child: Text('Two-Wheeler / Motorbike')),
-                      DropdownMenuItem(value: 'car', child: Text('Four-Wheeler / Car')),
-                      DropdownMenuItem(value: 'van', child: Text('Van / Mini-Truck')),
-                    ],
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() {
-                          _selectedVehicleType = val;
-                          if (val == 'walking') {
-                            _selectedCarryingCapacity = 10;
-                          } else if (val == 'bike') {
-                            _selectedCarryingCapacity = 50;
-                          } else if (val == 'car') {
-                            _selectedCarryingCapacity = 150;
-                          } else if (val == 'van') {
-                            _selectedCarryingCapacity = 500;
-                          }
-                        });
+                  const SizedBox(height: 14),
+                  AppTextField(
+                    label: AppLocale.t('password'),
+                    hint: AppLocale.t('create_password_hint'),
+                    controller: _passwordController,
+                    obscureText: true,
+                    validator: (v) {
+                      if (v == null || v.isEmpty) {
+                        return AppLocale.t('create_password_hint');
                       }
+                      if (v.length < 8) {
+                        return AppLocale.t('password_min_length');
+                      }
+                      return null;
                     },
                   ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<int>(
-                    initialValue: _selectedCarryingCapacity,
-                    decoration: InputDecoration(
-                      labelText: context.tr('payload_capacity'),
-                      prefixIcon: const Icon(Icons.fitness_center),
+                  const SizedBox(height: 14),
+                  if (_role == UserRole.volunteer)
+                    _VehicleSelector(
+                      selectedKey: _vehicleKey,
+                      options: _vehicleOptions,
+                      onChanged: (key) => setState(() => _vehicleKey = key),
+                    )
+                  else if (_role == UserRole.admin)
+                    AppTextField(
+                      label: AppLocale.t('admin_passkey'),
+                      hint: AppLocale.t('admin_passkey_hint'),
+                      controller: _extraController,
+                      obscureText: true,
+                      validator: (v) => (v == null || v.trim().isEmpty)
+                          ? AppLocale.t('admin_required')
+                          : null,
+                    )
+                  else
+                    AppTextField(
+                      label: _extraLabel,
+                      hint: _role == UserRole.donor
+                          ? AppLocale.t('business_name_hint')
+                          : AppLocale.t('organisation_name_hint'),
+                      controller: _extraController,
+                      validator: (v) => (v == null || v.trim().isEmpty)
+                          ? AppLocale.t('field_required')
+                          : null,
                     ),
-                    items: [
-                      DropdownMenuItem(value: 10, child: Text('10 ${context.tr('unit_meals')} (Compact)')),
-                      DropdownMenuItem(value: 50, child: Text('50 ${context.tr('unit_meals')} (Medium - Bike)')),
-                      DropdownMenuItem(value: 150, child: Text('150 ${context.tr('unit_meals')} (Large - Car)')),
-                      DropdownMenuItem(value: 500, child: Text('500 ${context.tr('unit_meals')} (Bulk - Van)')),
-                    ],
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() => _selectedCarryingCapacity = val);
-                      }
-                    },
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: _isSubmitting ? null : _submit,
+                    child: _isSubmitting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2, color: Colors.white),
+                          )
+                        : Text(AppLocale.t('create_account')),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
                 ],
-
-                // Email
-                TextFormField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: InputDecoration(
-                    labelText: context.tr('email'),
-                    prefixIcon: const Icon(Icons.email_outlined),
-                  ),
-                  validator: (v) => v == null || !v.contains('@') ? context.tr('enter_email') : null,
-                ),
-                const SizedBox(height: 16),
-
-                // Phone
-                TextFormField(
-                  controller: _phoneController,
-                  keyboardType: TextInputType.phone,
-                  decoration: InputDecoration(
-                    labelText: context.tr('phone_number'),
-                    prefixIcon: const Icon(Icons.phone_outlined),
-                  ),
-                  validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
-                ),
-                const SizedBox(height: 16),
-
-                // Address
-                TextFormField(
-                  controller: _addressController,
-                  decoration: InputDecoration(
-                    labelText: context.tr('pickup_address'),
-                    prefixIcon: const Icon(Icons.location_on_outlined),
-                  ),
-                  validator: (v) => v == null || v.trim().isEmpty ? context.tr('field_required') : null,
-                ),
-                const SizedBox(height: 16),
-
-                // Password
-                TextFormField(
-                  controller: _passwordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: context.tr('password'),
-                    prefixIcon: const Icon(Icons.lock_outline),
-                  ),
-                  validator: (v) => v == null || v.length < 6 ? context.tr('enter_password') : null,
-                ),
-                const SizedBox(height: 16),
-
-                // Confirm Password
-                TextFormField(
-                  controller: _confirmPasswordController,
-                  obscureText: true,
-                  decoration: InputDecoration(
-                    labelText: context.tr('confirm_password'),
-                    prefixIcon: const Icon(Icons.lock_outline),
-                  ),
-                  validator: (v) => v == null || v.isEmpty ? context.tr('confirm_password') : null,
-                ),
-                const SizedBox(height: 24),
-
-                // Register Button
-                ElevatedButton(
-                  onPressed: authProvider.isLoading ? null : _handleRegister,
-                  child: authProvider.isLoading
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                        )
-                      : Text(context.tr('register')),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _VehicleSelector extends StatelessWidget {
+  final String selectedKey;
+  final List<_VehicleOption> options;
+  final ValueChanged<String> onChanged;
+
+  const _VehicleSelector({
+    required this.selectedKey,
+    required this.options,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(AppLocale.t('vehicle_type'), style: AppTextStyles.label),
+        const SizedBox(height: 6),
+        Row(
+          children: options.map((option) {
+            final bool isSelected = option.key == selectedKey;
+            return Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: GestureDetector(
+                  onTap: () => onChanged(option.key),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? AppColors.sabziGreen
+                          : AppColors.surfaceWhite,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: isSelected
+                            ? AppColors.sabziGreen
+                            : AppColors.hairline,
+                      ),
+                    ),
+                    child: Text(
+                      AppLocale.t(option.labelKey),
+                      style: AppTextStyles.bodySmall.copyWith(
+                        color: isSelected ? Colors.white : AppColors.deepSabzi,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }

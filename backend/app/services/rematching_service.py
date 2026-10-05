@@ -17,6 +17,7 @@ from sqlalchemy import text
 from app.models.models import (
     FoodDonation, VolunteerAssignment, User, NGO, DonationHistory, AuditLog, Notification
 )
+from app.core.config import settings
 from app.services.route_service import route_service, haversine_distance_km
 from app.services.notification_service import create_notification, create_event_notification
 from app.services.security_service import log_audit_event, log_rescue_operation
@@ -355,19 +356,22 @@ class RematchingService:
             User.admin_action_status != "RESTRICTED"
         ).all()
 
-        viable_ranked = []
-
+        # Pre-filter 1: Cheap local filters (Role, Active, Restriction, Exclude failing, Capacity, Concurrency)
+        filtered_candidates = []
         for vol in candidates:
-            # Hard Gate 1: Exclude the current failing volunteer
             if exclude_volunteer_id and vol.id == exclude_volunteer_id:
                 continue
-
-            # Hard Gate 2: Vehicle Capacity >= donation quantity
-            capacity = vol.carrying_capacity or 50
-            if capacity < donation.quantity:
+            try:
+                cap_val = float(vol.carrying_capacity) if getattr(vol, "carrying_capacity", None) is not None else 50.0
+            except (ValueError, TypeError):
+                cap_val = 50.0
+            try:
+                raw_qty = getattr(donation, "quantity", None) or getattr(donation, "quantity_kg", None) or 1.0
+                qty_val = float(raw_qty)
+            except (ValueError, TypeError):
+                qty_val = 1.0
+            if cap_val < qty_val:
                 continue
-
-            # Hard Gate 3: Active concurrency check (max 3 active tasks)
             active_count = db.query(VolunteerAssignment).filter(
                 VolunteerAssignment.volunteer_id == vol.id,
                 VolunteerAssignment.status.in_(["assigned", "accepted", "en_route", "arrived", "collected", "in_transit"])
@@ -375,18 +379,36 @@ class RematchingService:
             if active_count >= 3:
                 continue
 
-            # Hard Gate 4: Route Feasibility
+            vol_lat = vol.latitude or donor_lat
+            vol_lon = vol.longitude or donor_lon
+            # Cheap straight-line proximity for initial bounding
+            proximity_km = haversine_distance_km(vol_lat, vol_lon, donor_lat, donor_lon) or 999.0
+            filtered_candidates.append((proximity_km, vol))
+
+        # Sort by proximity and bound to top candidates to prevent external routing storms
+        max_routed_candidates = getattr(settings, "ROUTING_MAX_CANDIDATES_PER_REMATCH", 5)
+        filtered_candidates.sort(key=lambda x: x[0])
+        bounded_candidates = [vol for _, vol in filtered_candidates[:max_routed_candidates]]
+
+        # Compute Donor -> NGO leg once per transport mode (avoids redundant calls)
+        donor_ngo_legs: Dict[str, Dict[str, Any]] = {}
+
+        viable_ranked = []
+        for vol in bounded_candidates:
             vol_lat = vol.latitude or donor_lat
             vol_lon = vol.longitude or donor_lon
             mode = vol.vehicle_type or "bike"
 
+            # Route Leg 1: Volunteer -> Donor
             eta_res = route_service.calculate_eta(vol_lat, vol_lon, donor_lat, donor_lon, transport_mode=mode)
-            eta_to_donor = eta_res["eta_minutes"]
-            dist_to_donor = eta_res["distance_km"]
+            eta_to_donor = eta_res.get("eta_minutes", 15)
+            dist_to_donor = eta_res.get("distance_km", 5.0)
 
-            # Leg 2 from donor to NGO
-            ngo_leg = route_service.calculate_eta(donor_lat, donor_lon, ngo_lat, ngo_lon, transport_mode=mode)
-            transit_to_ngo = ngo_leg["eta_minutes"]
+            # Route Leg 2: Donor -> NGO (computed once per mode or retrieved from cache)
+            if mode not in donor_ngo_legs:
+                donor_ngo_legs[mode] = route_service.calculate_eta(donor_lat, donor_lon, ngo_lat, ngo_lon, transport_mode=mode)
+            ngo_leg = donor_ngo_legs[mode]
+            transit_to_ngo = ngo_leg.get("eta_minutes", 20)
 
             total_mission_time = (
                 eta_to_donor +
@@ -403,8 +425,11 @@ class RematchingService:
             # Ranking Formula:
             # Score = (Feasibility Buffer * 0.4) + (Reliability Score * 0.3) - (ETA * 0.2) - (Distance * 0.1)
             feasibility_buffer = remaining_window_mins - total_mission_time
-            reliability = vol.reliability_score or 95.0
-            rank_score = (feasibility_buffer * 2.0) + (reliability * 0.5) - (eta_to_donor * 1.5) - (dist_to_donor * 0.5)
+            try:
+                reliability = float(vol.reliability_score) if getattr(vol, "reliability_score", None) is not None else 95.0
+            except (ValueError, TypeError):
+                reliability = 95.0
+            rank_score = (float(feasibility_buffer) * 2.0) + (reliability * 0.5) - (float(eta_to_donor) * 1.5) - (float(dist_to_donor) * 0.5)
 
             viable_ranked.append({
                 "volunteer": vol,

@@ -114,7 +114,7 @@ class FoodRescueStatusHelper {
       case 'CONCERNING':
       case 'POOR':
       case 'SPOILAGE_SUSPECTED':
-        label = norm == 'SPOILAGE_SUSPECTED'
+        label = (norm == 'SPOILAGE_SUSPECTED' || norm == 'POOR')
             ? context.trVisual('spoilage_suspected')
             : context.trVisual('concerning');
         icon = Icons.warning_amber_rounded;

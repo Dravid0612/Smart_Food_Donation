@@ -12,9 +12,13 @@ import 'providers/volunteer_task_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/reward_provider.dart';
 import 'providers/admin_provider.dart';
+import 'services/notification_service.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await NotificationService().initializeFirebase();
+  } catch (_) {}
   runApp(const SmartFoodApp());
 }
 
@@ -40,7 +44,7 @@ class SmartFoodApp extends StatelessWidget {
           return MaterialApp.router(
             title: localeProv.translate('app_title'),
             debugShowCheckedModeBanner: false,
-            theme: AppTheme.lightTheme,
+            theme: AppTheme.light,
             routerConfig: appRouter,
             locale: localeProv.locale,
             supportedLocales: LocaleProvider.supportedLocales,

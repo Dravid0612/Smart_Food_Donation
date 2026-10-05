@@ -94,7 +94,7 @@ void main() {
       expect(find.textContaining('Does not certify food safety'), findsOneWidget);
 
       // Check prep time options (normal donor understandable)
-      expect(find.text('Freshly prepared (within 30m)'), findsOneWidget);
+      expect(find.text('Just now'), findsOneWidget);
       expect(find.text('About 1 hour ago'), findsOneWidget);
 
       // Check SEND TO RESCUE primary button

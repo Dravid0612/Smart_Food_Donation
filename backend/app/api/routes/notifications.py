@@ -5,7 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.db.session import get_db
 from app.models.models import Notification, User, NotificationPreference
@@ -44,8 +44,7 @@ class NotificationPreferenceResponse(BaseModel):
     feedback_reminders: bool
     fcm_token_registered: bool  # True if FCM token present (never return the actual token)
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─── Notification List ────────────────────────────────────────────────────────
@@ -294,3 +293,61 @@ def update_notification_preferences(
         feedback_reminders=prefs.feedback_reminders,
         fcm_token_registered=bool(prefs.fcm_token),
     )
+
+
+class DeviceTokenRequest(BaseModel):
+    fcm_token: str
+
+
+@router.post("/device-token", status_code=status.HTTP_200_OK)
+def register_device_token(
+    payload: DeviceTokenRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Registers or updates the FCM device token for push notifications.
+    Supports token refresh and deduplication.
+    """
+    token = payload.fcm_token.strip() if payload.fcm_token else ""
+    if not token:
+        raise HTTPException(status_code=400, detail="Device token cannot be empty.")
+
+    prefs = db.query(NotificationPreference).filter(
+        NotificationPreference.user_id == current_user.id
+    ).first()
+
+    if prefs and prefs.fcm_token == token:
+        # Token already registered and active; skip redundant database write
+        return {"message": "Device token already registered", "user_id": current_user.id, "updated": False}
+
+    if not prefs:
+        prefs = NotificationPreference(user_id=current_user.id)
+        db.add(prefs)
+        db.flush()
+
+    prefs.fcm_token = token
+    prefs.fcm_token_updated_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"message": "Device token registered successfully", "user_id": current_user.id, "updated": True}
+
+
+@router.delete("/device-token", status_code=status.HTTP_200_OK)
+def unregister_device_token(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Clears the FCM device token upon user logout.
+    Prevents push notification leakage to subsequent or shared device sessions.
+    """
+    prefs = db.query(NotificationPreference).filter(
+        NotificationPreference.user_id == current_user.id
+    ).first()
+
+    if prefs and prefs.fcm_token:
+        prefs.fcm_token = None
+        prefs.fcm_token_updated_at = datetime.now(timezone.utc)
+        db.commit()
+
+    return {"message": "Device token unregistered successfully"}

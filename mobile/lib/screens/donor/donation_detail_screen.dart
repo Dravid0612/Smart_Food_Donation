@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
 import '../../providers/donation_provider.dart';
@@ -52,25 +54,38 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           backgroundColor: AppTheme.card,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: Text(context.tr('cancel'), style: const TextStyle(fontWeight: FontWeight.bold)),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(context.tr('cancel'), style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+              const Text(
+                'Please select a reason for cancelling this rescue:',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              ),
               const SizedBox(height: 12),
-              RadioGroup<String>(
-                groupValue: selectedReason,
-                onChanged: (v) {
-                  if (v != null) setDialogState(() => selectedReason = v);
-                },
-                child: Column(
-                  children: reasons.map((r) => RadioListTile<String>(
-                    title: Text(r, style: const TextStyle(fontSize: 13)),
-                    value: r,
-                    activeColor: AppTheme.error,
-                  )).toList(),
-                ),
+              Column(
+                children: reasons.map((r) {
+                  final isSelected = selectedReason == r;
+                  return InkWell(
+                    onTap: () => setDialogState(() => selectedReason = r),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Icon(
+                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                            color: isSelected ? AppTheme.error : AppTheme.textSecondary,
+                            size: 20,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(child: Text(r, style: const TextStyle(fontSize: 13))),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
               ),
             ],
           ),
@@ -98,6 +113,98 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _shareViaWhatsApp(BuildContext context, dynamic item) async {
+    final prov = Provider.of<DonationProvider>(context, listen: false);
+    final claimUrl = await prov.generateClaimToken(item.id);
+    if (!context.mounted) return;
+    final fullLink = 'https://smartfoodrescue.org${claimUrl ?? "/claim/${item.id}"}';
+    final shareMsg = context.tr('share_whatsapp_msg', {
+      'food': context.trFood(item.foodName),
+      'qty': '${item.quantity.toInt()} ${context.trUnit(item.quantityUnit)}',
+      'location': item.pickupAddress,
+      'link': fullLink,
+    });
+
+    final uri = Uri.parse('whatsapp://send?text=${Uri.encodeComponent(shareMsg)}');
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        await Clipboard.setData(ClipboardData(text: '$shareMsg\n$fullLink'));
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(context.tr('claim_link_copied')),
+              backgroundColor: AppTheme.primaryGreen,
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: '$shareMsg\n$fullLink'));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(context.tr('claim_link_copied')),
+            backgroundColor: AppTheme.primaryGreen,
+          ),
+        );
+      }
+    }
+  }
+
+  void _confirmSelfDropoff(BuildContext context, int donationId) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.card,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.directions_walk_rounded, color: AppTheme.primaryGreen, size: 24),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                context.tr('self_dropoff_confirm'),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          context.tr('self_dropoff_desc'),
+          style: const TextStyle(fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(context.tr('cancel'), style: const TextStyle(color: AppTheme.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+              final prov = Provider.of<DonationProvider>(context, listen: false);
+              final ok = await prov.selfDropoffDonation(donationId);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(ok ? context.tr('self_dropoff_success') : 'Failed to switch pickup mode.'),
+                    backgroundColor: ok ? AppTheme.primaryGreen : AppTheme.error,
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryGreen,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(context.tr('confirm')),
+          ),
+        ],
       ),
     );
   }
@@ -163,12 +270,25 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
           onPressed: () => context.pop(),
         ),
         actions: [
-          if (isPending)
+          if (['pending', 'accepted', 'volunteer_assigned', 'pickup_en_route', 'arrived_at_donor'].contains(item.status.toLowerCase()))
             IconButton(
               icon: const Icon(Icons.cancel_outlined, color: AppTheme.error),
               tooltip: context.tr('cancel'),
               onPressed: () => _showCancelDialog(context, item.id),
             ),
+          IconButton(
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: context.tr('report_problem'),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (ctx) => ReportProblemDialog(
+                  donationId: item.id,
+                  currentRole: 'donor',
+                ),
+              );
+            },
+          ),
         ],
       ),
       body: SingleChildScrollView(
@@ -460,21 +580,39 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                       style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
                     ),
                     const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 48,
-                      child: ElevatedButton.icon(
-                        onPressed: () => context.push('/donor/otp/${item.id}'),
-                        icon: const Icon(Icons.lock_open_rounded, color: Colors.white, size: 20),
-                        label: Text(
-                          context.tr('show_pickup_code'),
-                          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF10B981),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    // Plaintext OTP revealed on screen with explicit guidance
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFF10B981), width: 2),
+                      ),
+                      child: Text(
+                        item.verificationOtp?.isNotEmpty == true ? item.verificationOtp! : '••••',
+                        style: const TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 6.0,
+                          color: Color(0xFF065F46),
                         ),
                       ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      context.tr('pickup_code_warning'),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF065F46),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextButton.icon(
+                      onPressed: () => context.push('/donor/otp/${item.id}'),
+                      icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+                      label: Text(context.tr('show_pickup_code')),
                     ),
                   ],
                 ),
@@ -509,15 +647,34 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
                       context.tr('volunteer_on_the_way_desc'),
                       style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
                     ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: () => context.push('/donor/otp/${item.id}'),
-                      icon: const Icon(Icons.pin_outlined, size: 16),
-                      label: Text(context.tr('show_pickup_code'), style: const TextStyle(fontSize: 13)),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: const Color(0xFF38BDF8),
-                        side: const BorderSide(color: Color(0xFF38BDF8)),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    const SizedBox(height: 14),
+                    Center(
+                      child: Column(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: const Color(0xFF38BDF8)),
+                            ),
+                            child: Text(
+                              item.verificationOtp?.isNotEmpty == true ? item.verificationOtp! : '••••',
+                              style: const TextStyle(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 4.0,
+                                color: Color(0xFF0369A1),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            context.tr('pickup_code_warning'),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 11, color: Color(0xFF0369A1), fontWeight: FontWeight.w500),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -759,7 +916,64 @@ class _DonationDetailScreenState extends State<DonationDetailScreen> {
               locationText: item.pickupAddress,
               isExact: true, // Donor always sees their own exact address
             ),
-            const SizedBox(height: AppTheme.space24),
+            const SizedBox(height: AppTheme.space20),
+
+            // ── DONOR ACTION HUB (WHATSAPP SHARE & SELF DROP-OFF) ───────────
+            if (!['completed', 'delivered', 'cancelled', 'expired'].contains(item.status.toLowerCase())) ...[
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.space16),
+                decoration: BoxDecoration(
+                  color: AppTheme.card,
+                  borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+                  border: Border.all(color: AppTheme.border),
+                  boxShadow: AppTheme.shadowCard,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text(
+                      'Rescue Coordination Actions',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                    ),
+                    const SizedBox(height: 12),
+
+                    // WhatsApp Share Button
+                    ElevatedButton.icon(
+                      onPressed: () => _shareViaWhatsApp(context, item),
+                      icon: const Icon(Icons.share, color: Colors.white, size: 18),
+                      label: Text(
+                        context.tr('share_whatsapp'),
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: Colors.white),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF25D366), // WhatsApp Green
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    // Self Drop-off Option
+                    if (item.pickupMode != 'self_pickup' && !['collected', 'in_transit'].contains(item.status.toLowerCase()))
+                      OutlinedButton.icon(
+                        onPressed: () => _confirmSelfDropoff(context, item.id),
+                        icon: const Icon(Icons.directions_walk_rounded, size: 18, color: AppTheme.primaryGreen),
+                        label: Text(
+                          context.tr('self_dropoff'),
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.primaryGreen),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: AppTheme.primaryGreen),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.space20),
+            ],
 
             // ── Certificate & Record Button ─────────────────────────────────
             if (isDelivered) ...[

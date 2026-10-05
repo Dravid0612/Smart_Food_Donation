@@ -29,6 +29,7 @@ class _NgoReceivingDistributionScreenState extends State<NgoReceivingDistributio
   final _distFormKey = GlobalKey<FormState>();
 
   final _receivedQtyController = TextEditingController();
+  final _receiptNotesController = TextEditingController();
   final _distributeQtyController = TextEditingController();
   final _locationController = TextEditingController();
   final _beneficiariesController = TextEditingController();
@@ -56,6 +57,7 @@ class _NgoReceivingDistributionScreenState extends State<NgoReceivingDistributio
   @override
   void dispose() {
     _receivedQtyController.dispose();
+    _receiptNotesController.dispose();
     _distributeQtyController.dispose();
     _locationController.dispose();
     _beneficiariesController.dispose();
@@ -98,7 +100,12 @@ class _NgoReceivingDistributionScreenState extends State<NgoReceivingDistributio
 
     setState(() => _isConfirmingReceipt = true);
     final prov = Provider.of<DonationProvider>(context, listen: false);
-    final ok = await prov.deliverDonation(widget.donationId);
+    final ok = await prov.deliverDonation(
+      widget.donationId,
+      receivedQuantity: parsedQty,
+      condition: _conditionOnArrival,
+      remarks: _receiptNotesController.text.trim().isNotEmpty ? _receiptNotesController.text.trim() : null,
+    );
 
     if (!mounted) return;
     setState(() => _isConfirmingReceipt = false);
@@ -335,6 +342,7 @@ class _NgoReceivingDistributionScreenState extends State<NgoReceivingDistributio
               ),
               child: DonationStatusTimeline(
                 status: detail.status,
+                pickupMode: detail.pickupMode,
               ),
             ),
             const SizedBox(height: AppTheme.space20),
@@ -425,6 +433,16 @@ class _NgoReceivingDistributionScreenState extends State<NgoReceivingDistributio
                         onChanged: (val) {
                           if (val != null) setState(() => _conditionOnArrival = val);
                         },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _receiptNotesController,
+                        decoration: InputDecoration(
+                          labelText: 'Arrival Notes / Condition Remarks (Optional)',
+                          hintText: 'e.g. Received intact, temperature checked, no spillage',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTheme.radiusInput)),
+                          prefixIcon: const Icon(Icons.note_alt_outlined),
+                        ),
                       ),
                       const SizedBox(height: 16),
                       SizedBox(
@@ -645,6 +663,28 @@ class _NgoReceivingDistributionScreenState extends State<NgoReceivingDistributio
                 );
               }),
             ],
+            const SizedBox(height: AppTheme.space16),
+            Container(
+              padding: const EdgeInsets.all(AppTheme.space12),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceWarm,
+                borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                border: Border.all(color: AppTheme.border),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.info_outline, size: 16, color: AppTheme.textSecondary),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      context.tr('tax_deduction_disclaimer'),
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: AppTheme.space32),
           ],
         ),

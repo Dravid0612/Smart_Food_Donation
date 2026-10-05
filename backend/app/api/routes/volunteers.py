@@ -137,6 +137,18 @@ def create_volunteer_assignment(
     if not volunteer:
         raise HTTPException(status_code=404, detail="Volunteer user not found.")
 
+    # ── Single Active Task Guard: A volunteer can only have one active task at a time ──
+    active_assignment = db.query(VolunteerAssignment).filter(
+        VolunteerAssignment.volunteer_id == volunteer.id,
+        VolunteerAssignment.donation_id != donation.id,
+        VolunteerAssignment.status.in_(["assigned", "accepted", "en_route", "arrived", "collected", "in_transit"])
+    ).first()
+    if active_assignment:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Volunteer already has an active rescue task in progress. You may only hold one active assignment at a time."
+        )
+
     # ── Capacity Safeguard: Validate volunteer carrying capacity ───────────
     vol_cap = volunteer.carrying_capacity or 50
     if donation.quantity > vol_cap:
@@ -219,6 +231,16 @@ def create_volunteer_assignment(
         donation_id=donation.id,
         extra_message=f"Volunteer {volunteer.name} has been assigned to pick up your donation."
     )
+    if donation.assigned_ngo_id:
+        ngo_record = db.query(NGO).filter(NGO.id == donation.assigned_ngo_id).first()
+        if ngo_record and ngo_record.user_id:
+            create_event_notification(
+                db=db,
+                user_id=ngo_record.user_id,
+                event_type="VOLUNTEER_ASSIGNED",
+                donation_id=donation.id,
+                extra_message=f"Volunteer {volunteer.name} has been assigned to pick up donation #{donation.id} for your organization."
+            )
 
     now = datetime.now(timezone.utc)
     vol_offer = db.query(MatchOffer).filter(
@@ -539,7 +561,16 @@ def report_task_failure(
         remarks=f"Task failure reported: {reason_str}"
     )
 
-    if assignment:
+    if not assignment:
+        assignment = VolunteerAssignment(
+            donation_id=donation.id,
+            volunteer_id=current_user.id,
+            status="failed",
+            failure_reason=reason_str
+        )
+        db.add(assignment)
+        db.flush()
+    else:
         transition_assignment_status(
             db, assignment, "failed",
             changed_by_user_id=current_user.id,
@@ -548,10 +579,20 @@ def report_task_failure(
         )
         assignment.failure_reason = reason_str
 
-    # Adjust volunteer metrics
-    current_user.failed_deliveries = (current_user.failed_deliveries or 0) + 1
-    total = (current_user.completed_deliveries or 0) + current_user.failed_deliveries
-    current_user.reliability_score = round(((current_user.completed_deliveries or 0) / float(total)) * 100, 1)
+    # Adjust volunteer metrics according to cancellation reason (Section 21)
+    # Excused reasons (real breakdown, medical emergency, venue/donor issues) do NOT penalize reliability score
+    excused_keywords = [
+        "breakdown", "vehicle", "puncture", "flat", "engine", "accident", "broken",
+        "emergency", "medical", "hospital", "donor_unavailable", "donor unavailable",
+        "premises closed", "venue closed", "ngo closed", "food_spoiled", "food spoiled",
+        "food_expired", "food expired", "incorrect_location", "no longer available"
+    ]
+    is_excused = any(k in reason_str.lower() for k in excused_keywords)
+
+    if not is_excused:
+        current_user.failed_deliveries = (current_user.failed_deliveries or 0) + 1
+        total = (current_user.completed_deliveries or 0) + current_user.failed_deliveries
+        current_user.reliability_score = round(((current_user.completed_deliveries or 0) / float(total)) * 100, 1)
 
     # Alert Donor & NGO
     db.add(Notification(
@@ -580,27 +621,43 @@ def report_task_failure(
         )
 
     db.commit()
-    if assignment:
-        db.refresh(assignment)
-        return assignment
-    
-    return VolunteerAssignmentResponse(
-        id=0,
-        donation_id=donation.id,
-        volunteer_id=current_user.id,
-        assigned_at=datetime.now(timezone.utc),
-        status="failed",
-        failure_reason=donation.failure_reason
-    )
+    db.refresh(assignment)
+    return assignment
 
 @router.put("/assignments/{assignment_id}", response_model=VolunteerAssignmentResponse)
 def update_volunteer_assignment_status(
     assignment_id: int,
-    status_update: str, # accepted, collected, delivered, cancelled
+    status_update: str, # accepted, collected, delivered, cancelled, en_route, arrived, in_transit
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["volunteer", "ngo", "admin"]))
 ):
+    if assignment_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid assignment ID: ID must be a positive integer greater than 0."
+        )
+
     assignment = db.query(VolunteerAssignment).filter(VolunteerAssignment.id == assignment_id).first()
+    if not assignment:
+        if current_user.role == "volunteer":
+            assignment = db.query(VolunteerAssignment).filter(
+                VolunteerAssignment.donation_id == assignment_id,
+                VolunteerAssignment.volunteer_id == current_user.id
+            ).order_by(VolunteerAssignment.id.desc()).first()
+            if not assignment:
+                other_assignment = db.query(VolunteerAssignment).filter(
+                    VolunteerAssignment.donation_id == assignment_id
+                ).first()
+                if other_assignment:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You are not authorized to modify this assignment."
+                    )
+        else:
+            assignment = db.query(VolunteerAssignment).filter(
+                VolunteerAssignment.donation_id == assignment_id
+            ).order_by(VolunteerAssignment.id.desc()).first()
+
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found.")
 
@@ -814,11 +871,58 @@ def start_pickup(
 @router.post("/assignments/{assignment_id}/arrived", response_model=VolunteerAssignmentResponse)
 def signal_arrival_at_donor(
     assignment_id: int,
+    method: str = Query("gps", description="Arrival verification method: gps, manual_here, donor_confirmed, admin_override"),
+    reason: Optional[str] = Query(None, description="Reason if manual/fallback arrival verification is used"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_role(["volunteer", "admin"]))
 ):
     """Signals that volunteer has physically arrived at donor location, triggering donor arrival notification."""
-    return update_volunteer_assignment_status(assignment_id, "arrived", db, current_user)
+    res = update_volunteer_assignment_status(assignment_id, "arrived", db, current_user)
+    # Master Prompt Section 14: Log audited arrival details
+    log_audit_event(
+        db, action="volunteer_arrival_verified", user_id=current_user.id,
+        resource_type="assignment", resource_id=res.id, status_code="success",
+        details=f"Arrival verified via method '{method}' (reason: {reason or 'Standard GPS arrival'}) for donation {res.donation_id}"
+    )
+    return res
+
+@router.post("/donations/{donation_id}/start-pickup", response_model=VolunteerAssignmentResponse)
+def start_pickup_by_donation(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["volunteer", "admin"]))
+):
+    """Signals that volunteer is actively traveling to donor location for pickup (addressed by donation ID)."""
+    return update_volunteer_assignment_status(donation_id, "en_route", db, current_user)
+
+@router.post("/donations/{donation_id}/arrived", response_model=VolunteerAssignmentResponse)
+def signal_arrival_by_donation(
+    donation_id: int,
+    method: str = Query("gps"),
+    reason: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["volunteer", "admin"]))
+):
+    """Signals that volunteer has arrived at donor location (addressed by donation ID)."""
+    return signal_arrival_at_donor(donation_id, method=method, reason=reason, db=db, current_user=current_user)
+
+@router.post("/donations/{donation_id}/in-transit", response_model=VolunteerAssignmentResponse)
+def signal_in_transit_by_donation(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["volunteer", "admin"]))
+):
+    """Signals that volunteer is in transit to receiving NGO."""
+    return update_volunteer_assignment_status(donation_id, "in_transit", db, current_user)
+
+@router.post("/donations/{donation_id}/deliver", response_model=VolunteerAssignmentResponse)
+def signal_delivered_by_donation(
+    donation_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role(["volunteer", "admin"]))
+):
+    """Signals that volunteer has delivered the food to receiving NGO."""
+    return update_volunteer_assignment_status(donation_id, "delivered", db, current_user)
 
 @router.get("/assignments/{assignment_id}", response_model=VolunteerAssignmentResponse)
 def get_volunteer_assignment(
@@ -826,6 +930,12 @@ def get_volunteer_assignment(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    if assignment_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid assignment ID: ID must be a positive integer greater than 0."
+        )
+
     assignment = db.query(VolunteerAssignment).filter(VolunteerAssignment.id == assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found.")
@@ -845,6 +955,12 @@ def accept_volunteer_assignment(
     current_user: User = Depends(require_role(["volunteer", "admin"]))
 ):
     """Volunteer formally accepts a dispatched food rescue task."""
+    if assignment_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid assignment ID: ID must be a positive integer greater than 0."
+        )
+
     assignment = db.query(VolunteerAssignment).filter(VolunteerAssignment.id == assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found.")
@@ -928,6 +1044,12 @@ def reject_volunteer_assignment(
     Volunteer rejects assignment.
     Automatically unassigns donation and executes fallback volunteer search.
     """
+    if assignment_id <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid assignment ID: ID must be a positive integer greater than 0."
+        )
+
     assignment = db.query(VolunteerAssignment).filter(VolunteerAssignment.id == assignment_id).first()
     if not assignment:
         raise HTTPException(status_code=404, detail="Assignment not found.")
@@ -1365,6 +1487,19 @@ def accept_rescue_claim(
         if request.current_lat is not None:
             volunteer.latitude = request.current_lat
             volunteer.longitude = request.current_lon
+
+    # ── Single Active Task Guard: A volunteer can only have one active task at a time ──
+    if volunteer.id:
+        active_assignment = db.query(VolunteerAssignment).filter(
+            VolunteerAssignment.volunteer_id == volunteer.id,
+            VolunteerAssignment.donation_id != donation.id,
+            VolunteerAssignment.status.in_(["assigned", "accepted", "en_route", "arrived", "collected", "in_transit"])
+        ).first()
+        if active_assignment:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Volunteer already has an active rescue task in progress. You may only hold one active assignment at a time."
+            )
 
     # ── 6. Feasibility Check ──────────────────────────────────────────────────
     feasibility = RematchingService.evaluate_assignment_feasibility(

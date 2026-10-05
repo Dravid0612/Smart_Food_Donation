@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import '../../models/user_model.dart';
+import '../../models/ngo_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/volunteer_task_provider.dart';
+import '../../providers/ngo_provider.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
+import '../../widgets/role_bottom_nav.dart';
 
 /// App-wide Profile Screen supporting all 4 roles:
 /// - Food Donor: Meals contributed, CO2 savings, CSR certificate & recurring schedules
@@ -27,6 +31,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final localeProv = Provider.of<LocaleProvider>(context);
     final user = auth.currentUser;
     final role = (user?.role ?? 'donor').toLowerCase();
+
+    NgoProvider? ngoProv;
+    try {
+      ngoProv = Provider.of<NgoProvider>(context, listen: false);
+    } catch (_) {}
+    final myNgo = (role == 'ngo') ? ngoProv?.myNgo : null;
 
     // Semantic colors & assets per role
     final Color roleColor;
@@ -103,11 +113,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // ── 1. ROLE HERO PROFILE CARD ──────────────────────────────────
-            _buildHeroProfileCard(context, user, role, roleColor, roleBgColor, roleIcon, roleTitle),
+            _buildHeroProfileCard(context, user, role, roleColor, roleBgColor, roleIcon, roleTitle, myNgo: myNgo),
             const SizedBox(height: AppTheme.space16),
 
             // ── 2. ROLE-SPECIFIC 2x2 METRICS OVERVIEW ──────────────────────
-            _buildRoleMetricsGrid(context, user, role, roleColor),
+            _buildRoleMetricsGrid(context, user, role, roleColor, myNgo: myNgo),
             const SizedBox(height: AppTheme.space16),
 
             // ── 3. ROLE-SPECIFIC QUICK ACTIONS & MANAGEMENT ────────────────
@@ -119,7 +129,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: AppTheme.space16),
 
             // ── 5. CONTACT & FACILITY INFO ──────────────────────────────────
-            _buildContactInfoCard(context, user, roleColor),
+            _buildContactInfoCard(context, user, roleColor, myNgo: myNgo),
             const SizedBox(height: AppTheme.space20),
 
             // ── 6. LOGOUT BUTTON & FOOTER ───────────────────────────────────
@@ -127,6 +137,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: AppTheme.space24),
           ],
         ),
+      ),
+      bottomNavigationBar: RoleBottomNav(
+        currentRole: role,
+        currentIndex: role == 'admin' ? 4 : (role == 'donor' ? 3 : 2),
       ),
     );
   }
@@ -139,8 +153,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     Color roleColor,
     Color roleBgColor,
     IconData roleIcon,
-    String roleTitle,
-  ) {
+    String roleTitle, {
+    dynamic myNgo,
+  }) {
     String trustBadgeText = '';
     IconData trustIcon = Icons.verified_user_rounded;
 
@@ -148,8 +163,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       trustBadgeText = '${context.tr('fssai_certified')} • ${context.tr('verified_partner')}';
       trustIcon = Icons.workspace_premium_rounded;
     } else if (role == 'ngo') {
-      trustBadgeText = '${context.tr('verified')} NGO • 80G Tax Exempt Certified';
-      trustIcon = Icons.verified_rounded;
+      final isVerified = myNgo?.isVerified ?? true;
+      trustBadgeText = isVerified ? '${context.tr('verified')} NGO Partner • Active' : 'Verification Pending';
+      trustIcon = isVerified ? Icons.verified_rounded : Icons.hourglass_top_rounded;
     } else if (role == 'volunteer') {
       trustBadgeText = '⭐ 98% ${context.tr('reliability_score')} • ${context.tr('role_volunteer')}';
       trustIcon = Icons.electric_bolt_rounded;
@@ -201,7 +217,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           // User / Organization Name
           Text(
-            user?.name ?? 'Smart Food Partner',
+            (role == 'ngo' && myNgo?.organizationName != null && myNgo!.organizationName.isNotEmpty)
+                ? myNgo!.organizationName
+                : (user?.name ?? 'Smart Food Partner'),
             textAlign: TextAlign.center,
             style: const TextStyle(
               fontSize: 20,
@@ -268,7 +286,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // ── 2. 2x2 METRICS GRID PER ROLE ───────────────────────────────────────────
-  Widget _buildRoleMetricsGrid(BuildContext context, dynamic user, String role, Color roleColor) {
+  Widget _buildRoleMetricsGrid(BuildContext context, dynamic user, String role, Color roleColor, {dynamic myNgo}) {
     final List<Map<String, dynamic>> metrics;
 
     if (role == 'donor') {
@@ -281,7 +299,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         {'label': 'CSR Tier', 'val': 'Gold', 'sub': 'Top 5% Partner', 'icon': Icons.workspace_premium_rounded},
       ];
     } else if (role == 'ngo') {
-      final capacity = (user?.carryingCapacity ?? 150).toInt();
+      final capacity = (myNgo?.capacity ?? (user?.carryingCapacity ?? 150)).toInt();
       metrics = [
         {'label': context.tr('intake_capacity'), 'val': '$capacity', 'sub': '${context.tr('unit_meals')}/day', 'icon': Icons.inventory_2_rounded},
         {'label': context.tr('meals_distributed'), 'val': '1,280', 'sub': context.tr('status_completed'), 'icon': Icons.volunteer_activism_rounded},
@@ -394,6 +412,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── 3. QUICK ACTIONS PER ROLE ──────────────────────────────────────────────
   Widget _buildRoleQuickActions(BuildContext context, String role, Color roleColor) {
+    final user = Provider.of<AuthProvider>(context, listen: false).currentUser;
     final List<Widget> actionTiles = [];
 
     if (role == 'donor') {
@@ -517,6 +536,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
         ),
         const SizedBox(height: 8),
+        _buildActionTile(
+          icon: Icons.two_wheeler_rounded,
+          color: const Color(0xFF0284C7),
+          title: context.tr('vehicle_profile'),
+          subtitle: '${user?.vehicleType ?? "Bike"} • ${user?.carryingCapacity ?? 50} ${context.tr("meals")}',
+          onTap: () => context.push('/volunteer/vehicle'),
+        ),
         _buildActionTile(
           icon: Icons.two_wheeler_rounded,
           color: const Color(0xFF0284C7),
@@ -734,7 +760,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // ── 5. CONTACT & FACILITY INFO ─────────────────────────────────────────────
-  Widget _buildContactInfoCard(BuildContext context, dynamic user, Color roleColor) {
+  Widget _buildContactInfoCard(BuildContext context, UserModel? user, Color roleColor, {NgoModel? myNgo}) {
+    final role = (user?.role ?? 'donor').toString().toLowerCase();
+    final phone = (role == 'ngo' && myNgo?.contactPhone != null && myNgo!.contactPhone!.isNotEmpty)
+        ? myNgo.contactPhone!
+        : (user?.phone ?? '+91 98765 43210');
+    final address = (role == 'ngo' && myNgo?.address != null && myNgo!.address!.isNotEmpty)
+        ? myNgo.address!
+        : (user?.address ?? 'MG Road, Bangalore, India');
+
     return Container(
       padding: const EdgeInsets.all(AppTheme.space16),
       decoration: BoxDecoration(
@@ -759,9 +793,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           const SizedBox(height: AppTheme.space12),
           _buildInfoRow(Icons.email_outlined, context.tr('email'), user?.email ?? 'support@smartfood.org'),
           const Divider(height: 16),
-          _buildInfoRow(Icons.phone_outlined, context.tr('phone_number'), user?.phone ?? '+91 98765 43210'),
+          _buildInfoRow(Icons.phone_outlined, context.tr('phone_number'), phone),
           const Divider(height: 16),
-          _buildInfoRow(Icons.location_on_outlined, context.tr('address'), user?.address ?? 'MG Road, Bangalore, India'),
+          _buildInfoRow(Icons.location_on_outlined, context.tr('address'), address),
+          if (role == 'volunteer') ...[
+            const Divider(height: 16),
+            _buildInfoRow(Icons.two_wheeler_outlined, context.tr('vehicle_type'), (user?.vehicleType ?? 'Bike').toUpperCase()),
+            const Divider(height: 16),
+            _buildInfoRow(Icons.fitness_center_outlined, context.tr('carrying_capacity'), '${user?.carryingCapacity ?? 50} ${context.tr('meals')}'),
+          ],
         ],
       ),
     );

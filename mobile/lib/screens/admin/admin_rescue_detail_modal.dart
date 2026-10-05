@@ -1,10 +1,27 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../../core/localization/app_locale.dart';
 import '../../core/theme/app_theme.dart';
 import '../../models/admin_operations_model.dart';
 import '../../providers/admin_provider.dart';
 import '../../providers/donation_provider.dart';
+
+/// Predefined Source -> Destination Force-State Transition Allow-List (Phase 6, Section 7)
+const Map<String, List<String>> allowedAdminForceTransitions = {
+  'pending': ['accepted', 'cancelled', 'expired'],
+  'accepted': ['pending', 'volunteer_assigned', 'collected', 'cancelled', 'expired'],
+  'volunteer_assigned': ['accepted', 'pickup_en_route', 'arrived_at_donor', 'collected', 'pickup_failed', 'cancelled'],
+  'pickup_en_route': ['accepted', 'arrived_at_donor', 'collected', 'pickup_failed', 'cancelled'],
+  'en_route': ['accepted', 'arrived_at_donor', 'collected', 'pickup_failed', 'cancelled'],
+  'arrived_at_donor': ['accepted', 'collected', 'pickup_failed', 'cancelled'],
+  'collected': ['in_transit', 'delivered', 'delivery_failed', 'cancelled'],
+  'in_transit': ['delivered', 'collected', 'delivery_failed', 'cancelled'],
+  'pickup_failed': ['accepted', 'volunteer_assigned', 'cancelled'],
+  'delivery_failed': ['delivered', 'cancelled'],
+  'delivered': ['partially_distributed', 'completed'],
+  'partially_distributed': ['completed'],
+};
 
 /// Modal bottom sheet / dialog displaying the complete Food Rescue Details, 9-stage linear food flow tracker,
 /// receiving discrepancy analysis, distribution metrics, audit logs, and intervention actions.
@@ -49,8 +66,15 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
 
   void _showInterventionDialog() {
     if (_detail == null) return;
+    String selectedActionType = 'intervention'; // intervention, force_state, reassign_volunteer, approve_self_dropoff, reopen_matching, emergency_broadcast
     String selectedReason = 'no_volunteer_available';
     final notesController = TextEditingController();
+    final volunteerIdController = TextEditingController();
+    String? validationError;
+
+    final curStatus = _detail!.status.toLowerCase();
+    final allowedTargets = allowedAdminForceTransitions[curStatus] ?? [];
+    String? selectedTargetStatus = allowedTargets.isNotEmpty ? allowedTargets.first : null;
 
     final reasonOptions = [
       {'code': 'no_volunteer_available', 'label': 'No Volunteer Available'},
@@ -60,6 +84,9 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
       {'code': 'food_condition_concern', 'label': 'Food Condition Concern'},
       {'code': 'quantity_mismatch', 'label': 'Quantity Mismatch Discrepancy'},
       {'code': 'transport_failure', 'label': 'Transport Failure'},
+      {'code': 'donor_self_dropoff', 'label': 'Donor Self-Dropoff'},
+      {'code': 'reassign_volunteer', 'label': 'Reassign Volunteer'},
+      {'code': 'emergency_broadcast', 'label': 'Emergency Broadcast'},
       {'code': 'other', 'label': 'Other Operational Issue'},
     ];
 
@@ -89,12 +116,18 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                   '${_detail!.foodName} (Donation #${_detail!.id})',
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textPrimary),
                 ),
-                const SizedBox(height: AppTheme.space12),
                 Text(
-                  context.tr('intervention_reason'),
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
+                  'Current Status: ${curStatus.toUpperCase()}',
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryDark),
                 ),
-                const SizedBox(height: AppTheme.space8),
+                const SizedBox(height: AppTheme.space12),
+
+                // ── Intervention Mode Selector ──
+                const Text(
+                  'Intervention Action:',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: AppTheme.space6),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
@@ -104,33 +137,141 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                   ),
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
-                      value: selectedReason,
+                      value: selectedActionType,
                       isExpanded: true,
-                      items: reasonOptions.map((opt) {
-                        return DropdownMenuItem<String>(
-                          value: opt['code'],
-                          child: Text(opt['label']!, style: const TextStyle(fontSize: 13)),
-                        );
-                      }).toList(),
+                      items: [
+                        const DropdownMenuItem(value: 'intervention', child: Text('Operational Issue Intervention', style: TextStyle(fontSize: 13))),
+                        DropdownMenuItem(value: 'force_state', child: Text(context.tr('force_state_title'), style: const TextStyle(fontSize: 13))),
+                        DropdownMenuItem(value: 'reassign_volunteer', child: Text(context.tr('reassign_volunteer'), style: const TextStyle(fontSize: 13))),
+                        DropdownMenuItem(value: 'approve_self_dropoff', child: Text(context.tr('approve_self_dropoff'), style: const TextStyle(fontSize: 13))),
+                        DropdownMenuItem(value: 'reopen_matching', child: Text(context.tr('reopen_matching'), style: const TextStyle(fontSize: 13))),
+                        DropdownMenuItem(value: 'emergency_broadcast', child: Text(context.tr('emergency_broadcast'), style: const TextStyle(fontSize: 13))),
+                      ],
                       onChanged: (val) {
                         if (val != null) {
-                          setDialogState(() => selectedReason = val);
+                          setDialogState(() {
+                            selectedActionType = val;
+                            validationError = null;
+                          });
                         }
                       },
                     ),
                   ),
                 ),
-                const SizedBox(height: AppTheme.space16),
+                const SizedBox(height: AppTheme.space12),
+
+                // ── Dynamic Form Based on Action Type ──
+                if (selectedActionType == 'force_state') ...[
+                  const Text(
+                    'Target Force State (Strictly Whitelisted):',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(height: AppTheme.space6),
+                  if (allowedTargets.isEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.error.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        context.tr('force_state_illegal_error'),
+                        style: const TextStyle(fontSize: 12, color: AppTheme.error, fontWeight: FontWeight.w600),
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: AppTheme.border),
+                        borderRadius: BorderRadius.circular(AppTheme.radiusInput),
+                        color: AppTheme.surface,
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: selectedTargetStatus,
+                          isExpanded: true,
+                          items: allowedTargets.map((st) {
+                            return DropdownMenuItem<String>(
+                              value: st,
+                              child: Text(st.toUpperCase(), style: const TextStyle(fontSize: 13)),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setDialogState(() => selectedTargetStatus = val);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Impact Integrity Notice: Forcing state to Delivered or Completed will not create artificial rescued quantities.',
+                    style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
+                  ),
+                  const SizedBox(height: AppTheme.space12),
+                ] else if (selectedActionType == 'reassign_volunteer') ...[
+                  const Text(
+                    'Replacement Volunteer User ID:',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(height: AppTheme.space6),
+                  TextField(
+                    controller: volunteerIdController,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      hintText: 'Enter volunteer user ID (e.g. 5)',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTheme.radiusInput)),
+                      contentPadding: const EdgeInsets.all(12),
+                    ),
+                  ),
+                  const SizedBox(height: AppTheme.space12),
+                ] else if (selectedActionType == 'intervention') ...[
+                  Text(
+                    context.tr('intervention_reason'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(height: AppTheme.space6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: AppTheme.border),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusInput),
+                      color: AppTheme.surface,
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: selectedReason,
+                        isExpanded: true,
+                        items: reasonOptions.map((opt) {
+                          return DropdownMenuItem<String>(
+                            value: opt['code'],
+                            child: Text(opt['label']!, style: const TextStyle(fontSize: 13)),
+                          );
+                        }).toList(),
+                        onChanged: (val) {
+                          if (val != null) {
+                            setDialogState(() => selectedReason = val);
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: AppTheme.space12),
+                ],
+
+                // ── Operational Notes & Justification (Mandatory >= 5 chars) ──
                 const Text(
-                  'Operational Notes:',
+                  'Mandatory Operational Reason / Remark (Min 5 chars):',
                   style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary),
                 ),
-                const SizedBox(height: AppTheme.space8),
+                const SizedBox(height: AppTheme.space6),
                 TextField(
                   controller: notesController,
                   maxLines: 3,
                   decoration: InputDecoration(
-                    hintText: 'Enter specific instructions or coordinator notes...',
+                    hintText: context.tr('mandatory_reason_hint'),
                     hintStyle: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(AppTheme.radiusInput),
@@ -139,6 +280,14 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                     contentPadding: const EdgeInsets.all(12),
                   ),
                 ),
+
+                if (validationError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    validationError!,
+                    style: const TextStyle(fontSize: 12, color: AppTheme.error, fontWeight: FontWeight.bold),
+                  ),
+                ],
               ],
             ),
           ),
@@ -154,17 +303,83 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
               ),
               onPressed: () async {
+                final notes = notesController.text.trim();
+
+                // Validate mandatory reason (min 5 characters)
+                if (notes.length < 5) {
+                  setDialogState(() => validationError = context.tr('reason_too_short'));
+                  return;
+                }
+
+                // Validate force state transitions
+                if (selectedActionType == 'force_state') {
+                  if (selectedTargetStatus == null || !allowedTargets.contains(selectedTargetStatus)) {
+                    setDialogState(() => validationError = context.tr('force_state_illegal_error'));
+                    return;
+                  }
+                }
+
+                if (selectedActionType == 'reassign_volunteer') {
+                  final volId = int.tryParse(volunteerIdController.text.trim());
+                  if (volId == null) {
+                    setDialogState(() => validationError = 'Please enter a valid replacement volunteer ID.');
+                    return;
+                  }
+                }
+
                 Navigator.of(ctx).pop();
                 final adminProv = Provider.of<AdminProvider>(context, listen: false);
-                final ok = await adminProv.submitIntervention(
-                  _detail!.id,
-                  selectedReason,
-                  notes: notesController.text.trim(),
-                );
+
+                bool ok = false;
+                if (selectedActionType == 'force_state') {
+                  ok = await adminProv.submitIntervention(
+                    _detail!.id,
+                    'other',
+                    notes: notes,
+                    actionType: 'force_state',
+                    targetStatus: selectedTargetStatus,
+                  );
+                } else if (selectedActionType == 'reassign_volunteer') {
+                  ok = await adminProv.submitIntervention(
+                    _detail!.id,
+                    'reassign_volunteer',
+                    notes: notes,
+                    actionType: 'reassign_volunteer',
+                    replacementVolunteerId: int.tryParse(volunteerIdController.text.trim()),
+                  );
+                } else if (selectedActionType == 'approve_self_dropoff') {
+                  ok = await adminProv.submitIntervention(
+                    _detail!.id,
+                    'donor_self_dropoff',
+                    notes: notes,
+                    actionType: 'approve_self_dropoff',
+                  );
+                } else if (selectedActionType == 'reopen_matching') {
+                  ok = await adminProv.submitIntervention(
+                    _detail!.id,
+                    'reopen_matching',
+                    notes: notes,
+                    actionType: 'reopen_matching',
+                  );
+                } else if (selectedActionType == 'emergency_broadcast') {
+                  ok = await adminProv.submitIntervention(
+                    _detail!.id,
+                    'emergency_broadcast',
+                    notes: notes,
+                    actionType: 'emergency_broadcast',
+                  );
+                } else {
+                  ok = await adminProv.submitIntervention(
+                    _detail!.id,
+                    selectedReason,
+                    notes: notes,
+                  );
+                }
+
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text(ok ? 'Intervention recorded & logged to audit trail.' : 'Failed to record intervention.'),
+                      content: Text(ok ? 'Intervention recorded & logged to auditable history.' : 'Failed to record intervention.'),
                       backgroundColor: ok ? AppTheme.primaryGreen : AppTheme.error,
                     ),
                   );
@@ -266,6 +481,20 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
     );
   }
 
+  void _shareControlledClaimLink() {
+    if (_detail == null) return;
+    final token = _detail!.claimToken ?? '${_detail!.id}';
+    final claimUrl = 'https://smartfoodrescue.org/claim/$token';
+
+    Clipboard.setData(ClipboardData(text: claimUrl));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(context.tr('claim_link_copied')),
+        backgroundColor: AppTheme.primaryGreen,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final maxHeight = MediaQuery.of(context).size.height * 0.90;
@@ -362,8 +591,20 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            // ── BLOCKED RESCUE NOTICE ──
+                            if (_detail!.blockedReason != null && _detail!.blockedReason!.isNotEmpty) ...[
+                              _buildBlockedNoticeCard(),
+                              const SizedBox(height: 12),
+                            ],
+
+                            // ── SMALL DONATION INDICATOR ──
+                            if (_detail!.quantity <= 15) ...[
+                              _buildSmallDonationCard(),
+                              const SizedBox(height: 12),
+                            ],
+
                             // ── 1. FOOD & AI CONDITION ASSESSMENT ──
-                            _buildSectionHeader('Food & Assessment'),
+                            _buildSectionHeader('Food & AI Advisory'),
                             const SizedBox(height: 8),
                             _buildFoodAssessmentCard(),
                             const SizedBox(height: 16),
@@ -390,13 +631,29 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                             _buildDistributionCard(),
                             const SizedBox(height: 16),
 
-                            // ── 6. PARTICIPANT CONTACTS & ROUTE ──
-                            _buildSectionHeader('Participants & Route'),
+                            // ── 6. PARTICIPANT CONTACTS & TIMING-SAFE OTP STATE ──
+                            _buildSectionHeader('Participants & Handover State'),
                             const SizedBox(height: 8),
                             _buildParticipantsCard(),
-                            const SizedBox(height: 24),
+                            const SizedBox(height: 16),
 
-                            // ── 7. ACTION BUTTONS ──
+                            // ── 7. VERIFIED IMPACT METRICS ──
+                            _buildSectionHeader('Rescued Impact & Environmental Metrics'),
+                            const SizedBox(height: 8),
+                            _buildImpactCard(),
+                            const SizedBox(height: 16),
+
+                            // ── 8. AUDITABLE HISTORY ──
+                            _buildSectionHeader(context.tr('auditable_history')),
+                            const SizedBox(height: 8),
+                            _buildAuditableHistoryCard(),
+                            const SizedBox(height: 16),
+
+                            // ── 9. FSSAI INFORMATION (INFORMATIONAL ONLY) ──
+                            _buildFssaiGuidanceCard(),
+                            const SizedBox(height: 20),
+
+                            // ── 10. ACTION BUTTONS ──
                             Column(
                               children: [
                                 Row(
@@ -433,6 +690,21 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                                 const SizedBox(height: 10),
                                 SizedBox(
                                   width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: AppTheme.primaryDark,
+                                      side: const BorderSide(color: AppTheme.primaryGreen),
+                                      padding: const EdgeInsets.symmetric(vertical: 14),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                                    ),
+                                    icon: const Icon(Icons.share_outlined, size: 18, color: AppTheme.primaryGreen),
+                                    label: Text(context.tr('share_claim_link'), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                    onPressed: _shareControlledClaimLink,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                SizedBox(
+                                  width: double.infinity,
                                   child: ElevatedButton(
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: AppTheme.primaryGreen,
@@ -453,6 +725,62 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                     ),
                   ],
                 ),
+    );
+  }
+
+  Widget _buildBlockedNoticeCard() {
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space12),
+      decoration: BoxDecoration(
+        color: AppTheme.error.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+        border: Border.all(color: AppTheme.error.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.block_flipped, color: AppTheme.error, size: 24),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Rescue Stalled / Action Required',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.error),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _detail!.blockedReason!,
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSmallDonationCard() {
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF0FDF4),
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+        border: Border.all(color: AppTheme.primaryGreen.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.directions_walk_outlined, color: AppTheme.primaryGreen, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              context.tr('self_pickup_preferred_note'),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.primaryDark),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -527,8 +855,24 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
             children: [
               _buildMetricItem('Storage Method', _detail!.storageMethod),
               _buildMetricItem('Packaging', _detail!.packagingCondition),
+              _buildMetricItem('Preparation', _detail!.preparationTime ?? 'Verified Fresh'),
             ],
           ),
+          if (_detail!.aiAdvisory != null && _detail!.aiAdvisory!.isNotEmpty) ...[
+            const Divider(height: AppTheme.space20, color: AppTheme.divider),
+            Row(
+              children: [
+                const Icon(Icons.auto_awesome, size: 16, color: AppTheme.primaryGreen),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'AI Advisory: ${_detail!.aiAdvisory!}',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -580,9 +924,9 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
                   ),
                 ),
                 const SizedBox(height: 2),
-                const Text(
-                  'Visual assessment only. Advisory estimation for dispatch optimization.',
-                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                Text(
+                  'Wave: ${_detail!.waveName ?? "Wave ${_detail!.currentWave}"} • ${_detail!.offersCount} Offers Extended',
+                  style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
                 ),
               ],
             ),
@@ -784,9 +1128,153 @@ class _AdminRescueDetailModalState extends State<AdminRescueDetailModal> {
           const Divider(height: 16, color: AppTheme.divider),
           _buildParticipantRow(
             icon: Icons.directions_bike_outlined,
-            role: 'Volunteer Courier',
+            role: 'Volunteer Courier (${_detail!.feasibilityStatus})',
             name: _detail!.volunteerName ?? 'Awaiting Courier Dispatch',
             phone: _detail!.volunteerPhone,
+          ),
+          const Divider(height: 16, color: AppTheme.divider),
+          // OTP State Row - Strictly State String, Never Plaintext OTP
+          Row(
+            children: [
+              const Icon(Icons.lock_clock_outlined, size: 20, color: AppTheme.primaryDark),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Pickup OTP Verification State', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textSecondary)),
+                    Text(
+                      _detail!.otpState.replaceAll('_', ' '),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: _detail!.otpState == 'VERIFIED' ? AppTheme.primaryGreen : AppTheme.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppTheme.surface,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: const Text('Guarded (No OTP shown)', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImpactCard() {
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space14),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildMetricItem('Meals Rescued', '${_detail!.mealsRescued.toInt()} meals', color: AppTheme.primaryDark),
+              _buildMetricItem('CO2e Averted', '${_detail!.environmentalCo2Kg.toStringAsFixed(1)} kg', color: AppTheme.primaryGreen),
+              _buildMetricItem('Water Saved', '${_detail!.environmentalWaterLiters.toInt()} L', color: const Color(0xFF0284C7)),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            context.tr('impact_disclaimer'),
+            style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary, fontStyle: FontStyle.italic),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAuditableHistoryCard() {
+    final timeline = _detail!.timeline;
+
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space14),
+      decoration: BoxDecoration(
+        color: AppTheme.card,
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (timeline.isEmpty)
+            const Text('No logged audit actions recorded.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary))
+          else
+            ...timeline.map((item) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.history_outlined, size: 14, color: AppTheme.textSecondary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(item.label, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                              Text(item.actorName ?? 'System', style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                            ],
+                          ),
+                          if (item.details != null && item.details!.isNotEmpty)
+                            Text(item.details!, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFssaiGuidanceCard() {
+    return Container(
+      padding: const EdgeInsets.all(AppTheme.space12),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(AppTheme.radiusCard),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.health_and_safety_outlined, size: 18, color: AppTheme.primaryDark),
+              const SizedBox(width: 6),
+              Text(context.tr('fssai_info_title'), style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Keep hot foods above 65°C and cold foods below 5°C. Clean containers required.',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            context.tr('fssai_info_disclaimer'),
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: AppTheme.textMuted),
           ),
         ],
       ),
