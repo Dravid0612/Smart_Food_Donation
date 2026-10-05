@@ -26,7 +26,7 @@ class AppConstants {
 
   // API URL resolution:
   // Can be overridden at build time via:
-  //   flutter build apk --dart-define=API_BASE_URL=https://api.smartfoodrescue.org/api
+  //   flutter build apk --dart-define=API_BASE_URL=https://smart-food-donation-h1dz.onrender.com/api
   static const String _customApiUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
 
   static String get apiBaseUrl {
@@ -35,9 +35,9 @@ class AppConstants {
     }
     switch (environment) {
       case Environment.production:
-        return 'https://api.smartfoodrescue.org/api';
+        return 'https://smart-food-donation-h1dz.onrender.com/api';
       case Environment.staging:
-        return 'https://staging-api.smartfoodrescue.org/api';
+        return 'https://smart-food-donation-h1dz.onrender.com/api';
       case Environment.development:
         return 'http://10.0.2.2:8000/api';
     }

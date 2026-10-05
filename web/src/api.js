@@ -3,7 +3,7 @@
  * Handles authentication, RBAC headers, error mapping, and live endpoints.
  */
 
-const API_BASE = '/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? 'https://smart-food-donation-h1dz.onrender.com/api' : '/api');
 
 export const getAuthToken = () => {
   return localStorage.getItem('sfr_admin_token') || '';
