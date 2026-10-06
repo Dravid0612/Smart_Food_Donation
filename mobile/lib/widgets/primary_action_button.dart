@@ -35,7 +35,7 @@ class PrimaryActionButton extends StatelessWidget {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppTheme.radiusButton),
           ),
-          padding: const EdgeInsets.symmetric(horizontal: AppTheme.space24),
+          padding: const EdgeInsets.symmetric(horizontal: AppTheme.space16),
         ),
         child: isLoading
             ? const SizedBox(
@@ -48,17 +48,22 @@ class PrimaryActionButton extends StatelessWidget {
               )
             : Row(
                 mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
                 children: [
                   if (icon != null) ...[
                     Icon(icon, size: 20),
                     const SizedBox(width: AppTheme.space8),
                   ],
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: -0.2,
+                  Flexible(
+                    child: Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
                     ),
                   ),
                 ],

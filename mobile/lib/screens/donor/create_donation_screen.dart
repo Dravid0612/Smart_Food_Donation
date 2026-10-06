@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
@@ -673,17 +674,21 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    '${context.tr('step_progress', {'current': '${_currentStep + 1}', 'total': '6'})}: ${stepTitles[_currentStep].toUpperCase()}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.primaryGreen,
-                      letterSpacing: 0.5,
+                  Expanded(
+                    child: Text(
+                      '${context.tr('step_progress', {'current': '${_currentStep + 1}', 'total': '6'})}: ${stepTitles[_currentStep].toUpperCase()}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryGreen,
+                        letterSpacing: 0.5,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  const SizedBox(width: AppTheme.space8),
                   Text(
-                    stepTitles[_currentStep],
+                    '${_currentStep + 1} / 6',
                     style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w600),
                   ),
                 ],
@@ -695,44 +700,108 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
                 padding: const EdgeInsets.fromLTRB(AppTheme.space16, AppTheme.space8, AppTheme.space16, AppTheme.space32),
                 child: Form(
                   key: _formKey,
-                  child: _buildCurrentStepContent(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _buildCurrentStepContent(),
+                      const SizedBox(height: AppTheme.space24),
+                      _buildInlineStepNavButtons(),
+                    ],
+                  ),
                 ),
               ),
             ),
           ],
         ),
-        bottomNavigationBar: SafeArea(
-          child: Container(
-            padding: const EdgeInsets.all(AppTheme.space16),
-            decoration: const BoxDecoration(
-              color: AppTheme.surface,
-              border: Border(top: BorderSide(color: AppTheme.border)),
-            ),
-            child: Row(
-              children: [
-                if (_currentStep > 0) ...[
-                  OutlinedButton(
-                    onPressed: _isSubmitting ? null : _prevStep,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: AppTheme.space20, vertical: AppTheme.space14),
-                    ),
-                    child: Text(context.tr('back')),
+        bottomNavigationBar: Builder(
+          builder: (context) {
+            final viewPaddingBottom = MediaQuery.of(context).viewPadding.bottom;
+            final paddingBottom = MediaQuery.of(context).padding.bottom;
+            final safeBottom = math.max(viewPaddingBottom, paddingBottom);
+            return Container(
+              padding: EdgeInsets.fromLTRB(
+                AppTheme.space16,
+                AppTheme.space12,
+                AppTheme.space16,
+                safeBottom > 0 ? safeBottom + AppTheme.space8 : AppTheme.space16,
+              ),
+              decoration: const BoxDecoration(
+                color: AppTheme.surface,
+                border: Border(top: BorderSide(color: AppTheme.border)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x0A000000),
+                    offset: Offset(0, -2),
+                    blurRadius: 6,
                   ),
-                  const SizedBox(width: AppTheme.space12),
                 ],
-                Expanded(
-                  child: PrimaryActionButton(
-                    label: _currentStep == 5
-                        ? context.tr('create_donation').toUpperCase()
-                        : context.tr('continue_btn').toUpperCase(),
-                    isLoading: _isSubmitting,
-                    onPressed: _nextStep,
+              ),
+              child: Row(
+                children: [
+                  if (_currentStep > 0) ...[
+                    OutlinedButton(
+                      onPressed: _isSubmitting ? null : _prevStep,
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(0, 52),
+                        padding: const EdgeInsets.symmetric(horizontal: AppTheme.space20, vertical: AppTheme.space14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+                      ),
+                      child: Text(context.tr('back')),
+                    ),
+                    const SizedBox(width: AppTheme.space12),
+                  ],
+                  Expanded(
+                    child: PrimaryActionButton(
+                      label: _currentStep == 5
+                          ? context.tr('create_donation').toUpperCase()
+                          : context.tr('continue_btn').toUpperCase(),
+                      isLoading: _isSubmitting,
+                      onPressed: _nextStep,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInlineStepNavButtons() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: AppTheme.space8),
+      child: Row(
+        children: [
+          if (_currentStep > 0) ...[
+            OutlinedButton.icon(
+              onPressed: _isSubmitting ? null : _prevStep,
+              icon: const Icon(Icons.arrow_back, size: 18),
+              label: Text(
+                context.tr('back').toUpperCase(),
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(0, 52),
+                padding: const EdgeInsets.symmetric(horizontal: AppTheme.space20, vertical: AppTheme.space14),
+                side: const BorderSide(color: AppTheme.primaryGreen, width: 1.5),
+                foregroundColor: AppTheme.primaryGreen,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppTheme.radiusButton)),
+              ),
+            ),
+            const SizedBox(width: AppTheme.space12),
+          ],
+          Expanded(
+            child: PrimaryActionButton(
+              label: _currentStep == 5
+                  ? context.tr('create_donation').toUpperCase()
+                  : context.tr('continue_btn').toUpperCase(),
+              isLoading: _isSubmitting,
+              icon: _currentStep == 5 ? Icons.check_circle_outline : Icons.arrow_forward,
+              onPressed: _nextStep,
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1120,6 +1189,7 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
               // Unit Selector Dropdown
               DropdownButtonFormField<String>(
                 initialValue: _selectedUnit,
+                isExpanded: true,
                 decoration: InputDecoration(
                   labelText: context.tr('quantity_unit'),
                   prefixIcon: const Icon(Icons.scale, color: AppTheme.primaryGreen),
@@ -1163,8 +1233,14 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(context.tr('estimated_meals_count', {'count': estimatedMeals.toStringAsFixed(1)}),
-                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen)),
+                        Expanded(
+                          child: Text(
+                            context.tr('estimated_meals_count', {'count': estimatedMeals.toStringAsFixed(1)}),
+                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryGreen),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: AppTheme.space8),
                         Text('≈ $approxKg kg', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
                       ],
                     ),
@@ -1531,9 +1607,22 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
         children: [
           Icon(icon, size: 14, color: color),
           const SizedBox(width: 6),
-          Text(label, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-          const Spacer(),
-          Text(value, style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: color)),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          const SizedBox(width: AppTheme.space8),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: color),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
         ],
       ),
     );
@@ -1670,7 +1759,8 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(context.tr('visual_condition'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  Expanded(child: Text(context.tr('visual_condition'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: AppTheme.space8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(color: AppTheme.successLight, borderRadius: BorderRadius.circular(12)),
@@ -1683,7 +1773,8 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(context.tr('rescue_window'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  Expanded(child: Text(context.tr('rescue_window'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: AppTheme.space8),
                   Text(context.trRemainingMinutes(remMins), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.primaryGreen)),
                 ],
               ),
@@ -1692,7 +1783,8 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(context.tr('urgency_level'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  Expanded(child: Text(context.tr('urgency_level'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: AppTheme.space8),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                     decoration: BoxDecoration(color: AppTheme.warningLight, borderRadius: BorderRadius.circular(12)),
@@ -1705,7 +1797,8 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(context.tr('rescue_feasibility'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  Expanded(child: Text(context.tr('rescue_feasibility'), style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: AppTheme.space8),
                   Text(context.trFeasibility(feasibility), style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
                 ],
               ),
@@ -1977,7 +2070,8 @@ class _CreateDonationScreenState extends State<CreateDonationScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary), overflow: TextOverflow.ellipsis)),
+          const SizedBox(width: AppTheme.space8),
           Flexible(
             child: Text(
               value,
