@@ -1361,16 +1361,19 @@ class BackgroundUrgencyMonitor:
 
             rematches_triggered = 0
             for rescue in active_rescues:
-                health = rematching_service.verify_active_assignment_health(db, rescue, reference_time=now)
-                if health.get("requires_rematch"):
-                    rematch_res = rematching_service.attempt_dynamic_rematch(
-                        db=db,
-                        donation=rescue,
-                        trigger=health.get("trigger", "HEALTH_CHECK_FAILED"),
-                        reason=health.get("reason", "Automated feasibility/telemetry check triggered rematch")
-                    )
-                    if rematch_res.get("status") == "REMATCHED":
-                        rematches_triggered += 1
+                try:
+                    health = rematching_service.verify_active_assignment_health(db, rescue, reference_time=now)
+                    if health.get("requires_rematch"):
+                        rematch_res = rematching_service.attempt_dynamic_rematch(
+                            db=db,
+                            donation=rescue,
+                            trigger=health.get("trigger", "HEALTH_CHECK_FAILED"),
+                            reason=health.get("reason", "Automated feasibility/telemetry check triggered rematch")
+                        )
+                        if rematch_res.get("status") == "REMATCHED":
+                            rematches_triggered += 1
+                except Exception as rescue_err:
+                    logger.warning(f"[ProactiveUrgencyMonitor] Error evaluating active rescue #{rescue.id}: {rescue_err}")
 
             return {
                 "status": "SUCCESS",

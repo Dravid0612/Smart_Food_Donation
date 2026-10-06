@@ -106,7 +106,16 @@ ALLOWED_DONATION_TRANSITIONS: Dict[str, Set[str]] = {
     DonationStatus.ARRIVED_AT_DONOR: {
         DonationStatus.ARRIVED_AT_DONOR,  # Idempotent
         DonationStatus.COLLECTED,
+        DonationStatus.VOLUNTEER_ASSIGNED,  # Replacement courier dispatch if courier abandons before OTP
         DonationStatus.ACCEPTED,          # Rematch fallback
+        DonationStatus.CANCELLED,
+        DonationStatus.PICKUP_FAILED,
+    },
+    "arrived": {
+        "arrived",
+        DonationStatus.COLLECTED,
+        DonationStatus.VOLUNTEER_ASSIGNED,
+        DonationStatus.ACCEPTED,
         DonationStatus.CANCELLED,
         DonationStatus.PICKUP_FAILED,
     },
@@ -194,6 +203,7 @@ ROLE_PERMITTED_TRANSITIONS: Dict[str, Dict[str, Set[str]]] = {
     },
     DonationStatus.ARRIVED_AT_DONOR: {
         DonationStatus.COLLECTED: {"volunteer", "admin", "ngo"},
+        DonationStatus.VOLUNTEER_ASSIGNED: {"system", "admin", "volunteer"},
         DonationStatus.ACCEPTED: {"volunteer", "admin"},
         DonationStatus.PICKUP_FAILED: {"volunteer", "admin"},
         DonationStatus.CANCELLED: {"donor", "admin"},

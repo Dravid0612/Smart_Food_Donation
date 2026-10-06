@@ -604,9 +604,9 @@ def report_task_failure(
     ))
 
     # Dynamic Rematching: Automatically initiate backup courier search on vehicle breakdown or operational failure
-    # Do NOT rematch if failure is due to donor being unavailable, venue closed, or food condition
+    # Do NOT rematch if failure is due to donor being unavailable, venue closed, food condition, or post-collection
     donor_or_venue_issue = any(k in reason_str.lower() for k in ["donor_unavailable", "premises closed", "venue closed", "food_spoiled", "food_expired", "incorrect_location", "no longer available"])
-    if not donor_or_venue_issue and donation.status not in ["expired", "delivered", "completed", "cancelled"]:
+    if not donor_or_venue_issue and donation.status not in ["expired", "delivered", "completed", "cancelled", "delivery_failed", "collected", "in_transit"]:
         from app.services.rematching_service import RematchingService
         trigger = (
             "VEHICLE_BREAKDOWN"

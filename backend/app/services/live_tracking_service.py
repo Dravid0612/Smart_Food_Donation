@@ -182,15 +182,16 @@ class LiveTrackingService:
 
         if feasibility_result["feasibility_status"] in ["AT_RISK", "RESCUE_UNLIKELY"]:
             donation.feasibility_status = "AT_RISK"
-            # Trigger automatic dynamic rematching
-            rematch_response = rematching_service.attempt_dynamic_rematch(
-                db=db,
-                donation=donation,
-                trigger="ETA_EXCEEDED_WINDOW",
-                reason=f"Volunteer ETA ({eta_minutes} min) exceeded remaining rescue window"
-            )
-            rematch_triggered = rematch_response.get("status") == "REMATCHED"
-            rematch_info = rematch_response
+            # Trigger automatic dynamic rematching only for pre-collection active rescues
+            if donation.status not in ["collected", "in_transit", "delivered", "completed", "cancelled", "expired", "delivery_failed"]:
+                rematch_response = rematching_service.attempt_dynamic_rematch(
+                    db=db,
+                    donation=donation,
+                    trigger="ETA_EXCEEDED_WINDOW",
+                    reason=f"Volunteer ETA ({eta_minutes} min) exceeded remaining rescue window"
+                )
+                rematch_triggered = rematch_response.get("status") == "REMATCHED"
+                rematch_info = rematch_response
 
         db.commit()
         db.refresh(donation)

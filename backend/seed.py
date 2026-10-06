@@ -202,11 +202,21 @@ def seed_database():
             db.add(dh)
 
             if vol_id:
+                is_coll = (status == "collected")
+                is_comp = (status == "completed")
                 va = VolunteerAssignment(
                     donation_id=don.id,
                     volunteer_id=vol_id,
                     assigned_at=now - timedelta(minutes=30),
-                    status="collected" if status == "collected" else "delivered" if status == "completed" else "assigned"
+                    accepted_at=now - timedelta(minutes=25) if (is_coll or is_comp) else None,
+                    collected_at=now - timedelta(minutes=10) if (is_coll or is_comp) else None,
+                    delivered_at=now - timedelta(minutes=5) if is_comp else None,
+                    status="collected" if is_coll else "delivered" if is_comp else "assigned",
+                    last_location_update=now - timedelta(minutes=2) if is_coll else None,
+                    last_known_lat=donor.latitude if is_coll else None,
+                    last_known_lon=donor.longitude if is_coll else None,
+                    current_eta_minutes=15.0 if is_coll else None,
+                    current_distance_km=3.2 if is_coll else None
                 )
                 db.add(va)
 

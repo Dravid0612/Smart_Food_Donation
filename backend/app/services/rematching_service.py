@@ -244,9 +244,10 @@ class RematchingService:
                 if any(w in fail_reason.lower() for w in ["vehicle", "breakdown", "tyre", "puncture", "engine", "flat"])
                 else "COURIER_CANCELLED"
             )
+            is_post_coll = (donation.status in ["collected", "in_transit", "delivery_failed"]) or (assignment.status in ["collected", "in_transit", "delivery_failed"])
             return {
                 "healthy": False,
-                "requires_rematch": True,
+                "requires_rematch": not is_post_coll,
                 "trigger": trigger,
                 "reason": fail_reason,
                 "feasibility": None,
@@ -289,7 +290,18 @@ class RematchingService:
             reference_time=now,
             max_stale_minutes=max_stale_minutes
         )
+        is_post_coll = (donation.status in ["collected", "in_transit"]) or (assignment.status in ["collected", "in_transit"])
         if assignment.status in ["assigned", "accepted", "en_route", "arrived", "collected", "in_transit"] and telemetry_eval["is_stale"]:
+            if is_post_coll:
+                donation.feasibility_status = "AT_RISK"
+                return {
+                    "healthy": False,
+                    "requires_rematch": False,
+                    "trigger": "STALE_TELEMETRY",
+                    "reason": f"In-transit telemetry stale ({telemetry_eval['reason']}). Food already collected; courier update or admin check needed.",
+                    "feasibility": None,
+                    "telemetry": telemetry_eval
+                }
             return {
                 "healthy": False,
                 "requires_rematch": True,
@@ -308,6 +320,16 @@ class RematchingService:
             reference_time=now
         )
         if not feasibility_eval["is_feasible"]:
+            if is_post_coll:
+                donation.feasibility_status = "AT_RISK"
+                return {
+                    "healthy": False,
+                    "requires_rematch": False,
+                    "trigger": "ETA_EXCEEDED_WINDOW",
+                    "reason": f"In-transit mission time ({feasibility_eval['total_required_minutes']}m) exceeds remaining rescue window ({feasibility_eval['remaining_window_minutes']}m). Food already collected; escalated to NGO/admin.",
+                    "feasibility": feasibility_eval,
+                    "telemetry": telemetry_eval
+                }
             return {
                 "healthy": False,
                 "requires_rematch": True,
@@ -463,6 +485,36 @@ class RematchingService:
         """
         now = _utcnow()
         old_volunteer_id = donation.assigned_volunteer_id
+
+        # Guard: Check donation eligibility for dynamic donor pickup rematch
+        if donation.status in ["collected", "in_transit"]:
+            logger.warning(
+                f"[Dynamic Rematch] Donation #{donation.id} is already in '{donation.status}' state "
+                f"(food collected from donor). Dynamic donor rematch is not applicable post-collection."
+            )
+            donation.feasibility_status = "AT_RISK"
+            db.commit()
+            return {
+                "donation_id": donation.id,
+                "status": "NOT_APPLICABLE_POST_COLLECTION",
+                "rematch_count": donation.rematch_count or 0,
+                "rematch_reason": reason,
+                "feasibility_status": "AT_RISK",
+                "message": f"Donation #{donation.id} is already '{donation.status}' (food already collected from donor). Automatic donor rematch cannot be executed post-collection."
+            }
+
+        if donation.status in ["delivered", "partially_distributed", "completed", "cancelled", "expired", "delivery_failed"]:
+            logger.warning(
+                f"[Dynamic Rematch] Donation #{donation.id} is in non-rematchable state '{donation.status}'."
+            )
+            return {
+                "donation_id": donation.id,
+                "status": "INELIGIBLE_STATE",
+                "rematch_count": donation.rematch_count or 0,
+                "rematch_reason": reason,
+                "feasibility_status": donation.feasibility_status or "TERMINAL",
+                "message": f"Donation #{donation.id} is in state '{donation.status}'. Dynamic rematch is only applicable for pre-collection active rescues."
+            }
 
         # 1. Look for backup volunteers
         viable_candidates = RematchingService.find_feasible_backup_volunteers(

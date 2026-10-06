@@ -2,7 +2,7 @@ import time
 import uuid
 import logging
 from datetime import datetime, timezone
-from fastapi import FastAPI, Request, HTTPException, status
+from fastapi import FastAPI, Request, HTTPException, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -228,7 +228,7 @@ app.include_router(webhooks.router, prefix=settings.API_V1_STR)
 
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     db_val = validate_database_connection()
     db_diag = get_db_diagnostics()
@@ -279,7 +279,7 @@ def readiness_probe():
         )
     return {"status": "ready", "latency_ms": db_val["latency_ms"], "timestamp": datetime.now(timezone.utc).isoformat()}
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {
         "message": "Welcome to Smart Food Donation Platform API",
@@ -288,6 +288,10 @@ def root():
         "control_center": "/control-center",
         "version": "1.0.0"
     }
+
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"], include_in_schema=False)
+def favicon():
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # Mount React Web Control Center (Primary Admin Workspace)
 import os
